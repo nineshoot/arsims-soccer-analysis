@@ -1,0 +1,43 @@
+name: weekly-predictions
+
+on:
+  schedule:
+    # Times are UTC. Thu 07:00 = pre-weekend round, Mon 09:00 = settle.
+    - cron: "0 7 * * 4"     # Thursday: predict upcoming fixtures
+    - cron: "0 9 * * 1"     # Monday:   back-fill results + calibration
+  workflow_dispatch:          # let you run it by hand from the Actions tab
+
+permissions:
+  contents: write             # needed to commit predictions + PNGs back
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Predict upcoming fixtures
+        if: github.event.schedule == '0 7 * * 4' || github.event_name == 'workflow_dispatch'
+        run: python -m scripts.run_pipeline
+
+      - name: Settle results + calibration
+        if: github.event.schedule == '0 9 * * 1' || github.event_name == 'workflow_dispatch'
+        run: |
+          python -m scripts.settle_results
+          python -m scripts.run_pipeline   # redraw calibration.png
+
+      - name: Commit outputs
+        run: |
+          git config user.name  "prediction-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add predictions_log.csv output/
+          git commit -m "auto: predictions $(date -u +%Y-%m-%d)" || echo "nothing to commit"
+          git push

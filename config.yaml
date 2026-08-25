@@ -1,0 +1,31 @@
+# --------------------------------------------------------------------
+# Which leagues to model. Codes follow football-data.co.uk divisions.
+#   E0 = English Premier League   SP1 = La Liga
+#   I1 = Serie A                  D1  = Bundesliga     F1 = Ligue 1
+# The `name` is only used for chart titles / filenames.
+# --------------------------------------------------------------------
+leagues:
+  - code: E0
+    name: Premier League
+  - code: SP1
+    name: La Liga
+
+# Seasons to pull for TRAINING (football-data.co.uk 4-digit codes).
+# More history = more stable ratings, but older data matters less once
+# time-decay is on, so ~4 seasons is a sensible default.
+train_seasons: ["2223", "2324", "2425", "2526"]
+
+model:
+  # Dixon-Coles time-decay. Higher xi = faster forgetting of old games.
+  # 0.0018 ~ a match half-life of roughly one year. Tune with backtest.
+  xi: 0.0018
+  # Scoreline grid size for the joint Poisson matrix.
+  max_goals: 15
+
+# Which bookmaker odds columns to benchmark against, in order of
+# preference. "Avg" = market average, "PS" = Pinnacle, "B365" = Bet365.
+# Closing odds (…C…) are the honest benchmark; pre-match if unavailable.
+odds_priority: ["AvgC", "PSC", "B365C", "Avg", "PS", "B365"]
+
+output_dir: output
+log_path: predictions_log.csv
