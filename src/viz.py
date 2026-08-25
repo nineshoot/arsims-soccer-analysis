@@ -209,3 +209,57 @@ def calibration_curve(log_path: str, out: str, bins: int = 10) -> None:
         else "Model tracks its own confidence closely"
     _base(fig, title, f"{int(agg['n'].sum())} settled outcomes, {bins} buckets")
     fig.write_image(out, scale=SCALE)
+
+
+def accuracy_scoreboard(stats: dict, out: str) -> None:
+    """
+    Linear-style KPI card: win count + win rate, big and readable —
+    the number that actually goes on screen in a video, as opposed to
+    the more technical calibration_curve.
+    """
+    total, wins, rate = stats["total"], stats["wins"], stats["win_rate"]
+
+    fig = go.Figure()
+    # Big headline number as an indicator — no axes, pure KPI card.
+    fig.add_trace(go.Indicator(
+        mode="number",
+        value=rate * 100,
+        number=dict(suffix="%", font=dict(size=110, color=ACCENT)),
+        domain=dict(x=[0, 1], y=[0.35, 1]),
+    ))
+    fig.add_annotation(
+        text=f"{wins} / {total} correct picks", xref="paper", yref="paper",
+        x=0.5, y=0.28, xanchor="center", showarrow=False,
+        font=dict(size=22, color=FG))
+
+    # small breakdown row: Home / Draw / Away hit rates
+    order = ["H", "D", "A"]
+    display_names = {"H": "Home picks", "D": "Draw picks", "A": "Away picks"}
+    by = stats["by_outcome"]
+    parts = []
+    for k in order:
+        if k in by and by[k]["n"] > 0:
+            n, hits = int(by[k]["n"]), int(by[k]["hits"])
+            parts.append(f"{display_names[k]}: {hits}/{n}")
+    if parts:
+        fig.add_annotation(
+            text="   ·   ".join(parts), xref="paper", yref="paper",
+            x=0.5, y=0.12, xanchor="center", showarrow=False,
+            font=dict(size=15, color=MUTED))
+
+    fig.update_layout(
+        paper_bgcolor=BG,
+        font=dict(color=FG, family="Inter, -apple-system, Arial"),
+        width=1280, height=720,
+        margin=dict(l=40, r=40, t=40, b=40),
+        shapes=[dict(type="rect", xref="paper", yref="paper",
+                    x0=0, y0=0, x1=1, y1=1,
+                    line=dict(color=BORDER, width=1),
+                    fillcolor="rgba(0,0,0,0)")],
+    )
+    fig.add_annotation(
+        text="Model hit rate to date", xref="paper", yref="paper",
+        x=0.5, y=0.92, xanchor="center", showarrow=False,
+        font=dict(size=18, color=MUTED))
+    _watermark(fig)
+    fig.write_image(out, scale=SCALE)
