@@ -18,9 +18,7 @@ import penaltyblog as pb
 
 def _wr(seq, dtype):
     """Fresh, writable, contiguous array — the shape penaltyblog needs."""
-    a = np.array(list(seq), dtype=dtype)
-    a.setflags(write=True)
-    return a
+    return np.array(seq, dtype=dtype)
 
 
 class DixonColes:

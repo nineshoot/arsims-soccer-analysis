@@ -69,10 +69,17 @@ def run_league(code: str, name: str, cfg: dict) -> list[dict]:
         })
 
         slug = f"{code}_{home}_{away}".replace(" ", "-")
-        viz.scoreline_heatmap(pred["_grid"], home, away,
-                              str(out_dir / f"{slug}_heatmap.png"))
-        viz.model_vs_market(pred, market, home, away,
-                            str(out_dir / f"{slug}_1x2.png"))
+        try:
+            viz.scoreline_heatmap(pred["_grid"], home, away,
+                                  str(out_dir / f"{slug}_heatmap.png"))
+            viz.model_vs_market(pred, market, home, away,
+                                str(out_dir / f"{slug}_1x2.png"))
+        except Exception as e:
+            # Chart rendering is a nice-to-have, not the source of truth —
+            # a failure here (e.g. a broken kaleido install on some CI
+            # runner) must never cost us the numeric prediction, which is
+            # already in `rows` and is what predictions_log.csv depends on.
+            print(f"  [warn] chart render failed for {home} vs {away}: {e}")
 
     print(f"[{name}] {len(rows)} fixtures predicted -> {out_dir}")
     return rows
