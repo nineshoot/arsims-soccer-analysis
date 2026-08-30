@@ -128,8 +128,7 @@ def model_vs_market(pred: dict, market: dict | None,
     # the x-axis labels and in-bar numbers already carry the information.
     best_idx = int(np.argmax(model))
     grays = [GRAY_FILL, GRAY_FILL_2]
-    gray_cycle = iter(grays * 2)
-    colors = [ACCENT if i == best_idx else next(gray_cycle) for i in range(3)]
+    colors = [ACCENT if i == best_idx else grays[i % 2] for i in range(3)]
 
     fig = go.Figure()
     fig.add_bar(x=labels, y=model, name="Model", marker_color=colors,

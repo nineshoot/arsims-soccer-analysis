@@ -1,8 +1,5 @@
 __pycache__/
 *.pyc
 .venv/
-data/raw/*
-data/processed/*
-!data/**/.gitkeep
 .DS_Store
 *:Zone.Identifier
