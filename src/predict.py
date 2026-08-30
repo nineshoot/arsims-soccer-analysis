@@ -24,6 +24,21 @@ def _week_folder(base: Path, dates) -> Path:
     return folder
 
 
+def _h2h_rows(hist: pd.DataFrame, home: str, away: str, seasons: list[str],
+             n: int = 4) -> list[dict]:
+    """Last `n` meetings between these two teams in the most recent 2 seasons."""
+    recent = set(seasons[-2:])
+    mask = (hist["season"].isin(recent) &
+           (((hist["team_home"] == home) & (hist["team_away"] == away)) |
+            ((hist["team_home"] == away) & (hist["team_away"] == home))))
+    games = hist.loc[mask].sort_values("date", ascending=False).head(n)
+    return [
+        {"date": r["date"].strftime("%Y-%m-%d"),
+         "line": f"{r['team_home']} {r['goals_home']}-{r['goals_away']} {r['team_away']}"}
+        for _, r in games.iterrows()
+    ]
+
+
 def run_league(code: str, name: str, cfg: dict) -> list[dict]:
     print(f"[{name}] downloading results…")
     hist = data.results(code, cfg["train_seasons"])
@@ -54,6 +69,7 @@ def run_league(code: str, name: str, cfg: dict) -> list[dict]:
 
         pred = model.predict(home, away)
         market = implied_from_row(f, cfg["odds_priority"])
+        h2h = _h2h_rows(hist, home, away, cfg["train_seasons"])
 
         rows.append({
             "date": f["date"].date().isoformat(),
@@ -70,16 +86,15 @@ def run_league(code: str, name: str, cfg: dict) -> list[dict]:
 
         slug = f"{code}_{home}_{away}".replace(" ", "-")
         try:
-            viz.scoreline_heatmap(pred["_grid"], home, away,
-                                  str(out_dir / f"{slug}_heatmap.png"))
-            viz.model_vs_market(pred, market, home, away,
-                                str(out_dir / f"{slug}_1x2.png"))
+            viz.match_dashboard(pred, market, home, away, h2h,
+                                str(out_dir / f"{slug}_dashboard.png"))
         except Exception as e:
             # Chart rendering is a nice-to-have, not the source of truth —
-            # a failure here (e.g. a broken kaleido install on some CI
-            # runner) must never cost us the numeric prediction, which is
-            # already in `rows` and is what predictions_log.csv depends on.
-            print(f"  [warn] chart render failed for {home} vs {away}: {e}")
+            # a failure here (e.g. a broken kaleido/playwright install on
+            # some CI runner) must never cost us the numeric prediction,
+            # which is already in `rows` and is what predictions_log.csv
+            # depends on.
+            print(f"  [warn] dashboard render failed for {home} vs {away}: {e}")
 
     print(f"[{name}] {len(rows)} fixtures predicted -> {out_dir}")
     return rows
