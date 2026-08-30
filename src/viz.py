@@ -62,23 +62,24 @@ _CARD_CSS = """
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
-    width: __W__px; height: __H__px; position: relative;
+    width: __W__px; height: __H__px; position: relative; overflow: hidden;
     background: radial-gradient(circle at 12% 8%, #14162a 0%, __BG__ 45%, #050506 100%);
     font-family: Inter, -apple-system, Arial, sans-serif;
     color: __FG__;
     padding: 40px;
     display: flex; flex-direction: column; gap: 22px;
   }
+  .header { flex-shrink: 0; }
   .header h1 { font-size: 32px; font-weight: 700; margin-bottom: 4px; }
   .header p { font-size: 16px; color: __MUTED__; }
   .grid {
-    flex: 1; display: grid;
-    grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr;
+    flex: 1; min-height: 0; display: grid;
+    grid-template-columns: 1fr 1fr; grid-template-rows: 1.15fr 0.85fr;
     gap: 20px;
   }
   .grid.solo { grid-template-columns: 1fr; grid-template-rows: 1fr; }
   .card {
-    position: relative; border-radius: 20px;
+    position: relative; min-height: 0; border-radius: 20px;
     background: linear-gradient(160deg, rgba(255,255,255,0.07), rgba(255,255,255,0.015));
     border: 1px solid rgba(255,255,255,0.09);
     box-shadow: 0 24px 48px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06);
@@ -87,15 +88,15 @@ _CARD_CSS = """
   }
   .card .eyebrow {
     font-size: 12px; letter-spacing: 0.08em; color: __MUTED__;
-    text-transform: uppercase; font-weight: 600; margin-bottom: 6px;
+    text-transform: uppercase; font-weight: 600; margin-bottom: 6px; flex-shrink: 0;
   }
-  .card img { flex: 1; width: 100%; height: 100%; object-fit: contain; }
-  .h2h-list { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 12px; }
+  .card img { flex: 1; min-height: 0; width: 100%; height: 100%; object-fit: contain; }
+  .h2h-list { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 12px; }
   .h2h-row { display: flex; justify-content: space-between; font-size: 18px; }
   .h2h-row .date { color: __MUTED__; }
   .h2h-row .score { font-weight: 600; }
   .h2h-empty { margin: auto; color: __MUTED__; font-size: 16px; }
-  .verdict { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+  .verdict { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
   .verdict .big {
     font-size: 78px; font-weight: 800; color: __ACCENT__;
     text-shadow: 0 0 44px rgba(94,106,210,0.55); text-align: center;
