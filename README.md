@@ -19,7 +19,7 @@ Built on [`penaltyblog`](https://github.com/martineastwood/penaltyblog)
 |**Benchmark vs closing odds**|The honest test isn't "% correct" — it's whether the model tracks the market. Closing odds are the sharpest public probability.|
 |**`predictions\_log.csv` written *before* kickoff**|The one file that makes the whole thing trustworthy: no hindsight, real calibration.|
 |**GitHub Actions cron = the "automation"**|No Dataiku, no server, no bill. The green run-history *is* the automation.|
-|**Static Plotly PNGs**|Drop straight into a video-editing pipeline — no dashboard to host.|
+|**Static PNGs (Plotly + Playwright)**|Drop straight into a video-editing pipeline — no dashboard to host, no server to run.|
 
 ## How it works
 
@@ -51,7 +51,7 @@ football-predictor/
 │   ├── model.py               # Dixon-Coles wrapper (penaltyblog)
 │   ├── odds.py                # bookmaker odds → fair probabilities
 │   ├── logger.py              # the calibration ledger
-│   ├── viz.py                 # 3 static PNG charts
+│   ├── viz.py                 # glass-card dashboard + 2 aggregate PNG charts
 │   └── predict.py             # per-league orchestration
 ├── scripts/
 │   ├── run\_pipeline.py        # main entry: predict + log + charts
@@ -65,6 +65,7 @@ football-predictor/
 
 ```bash
 pip install -r requirements.txt
+playwright install chromium        # one-time: headless browser for chart rendering
 python -m scripts.run\_pipeline     # predict this week's fixtures
 # ...after the matches are played:
 python -m scripts.settle\_results   # fill in results

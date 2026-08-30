@@ -3,5 +3,6 @@ pandas>=2.0
 numpy>=1.24
 plotly>=5.20
 kaleido>=0.2.1
+playwright>=1.40
 pyyaml>=6.0
 requests>=2.31
