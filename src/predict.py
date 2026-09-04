@@ -87,7 +87,8 @@ def run_league(code: str, name: str, cfg: dict) -> list[dict]:
         slug = f"{code}_{home}_{away}".replace(" ", "-")
         try:
             viz.match_dashboard(pred, market, home, away, h2h,
-                                str(out_dir / f"{slug}_dashboard.png"))
+                                str(out_dir / f"{slug}_dashboard.png"),
+                                league=name, date=f["date"].date().isoformat())
         except Exception as e:
             # Chart rendering is a nice-to-have, not the source of truth —
             # a failure here (e.g. a broken kaleido/playwright install on
