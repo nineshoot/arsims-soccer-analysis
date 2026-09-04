@@ -51,7 +51,7 @@ football-predictor/
 │   ├── model.py               # Dixon-Coles wrapper (penaltyblog)
 │   ├── odds.py                # bookmaker odds → fair probabilities
 │   ├── logger.py              # the calibration ledger
-│   ├── viz.py                 # glass-card dashboard + 2 aggregate PNG charts
+│   ├── viz.py                 # mono-color print sheets: match, calibration, scoreboard
 │   └── predict.py             # per-league orchestration
 ├── scripts/
 │   ├── run\_pipeline.py        # main entry: predict + log + charts
