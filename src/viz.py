@@ -1,33 +1,35 @@
 """
 Static, high-res PNGs for the video pipeline. Three outputs:
 
-  1. match_dashboard    - one 2x2 glass-card image per fixture:
-                           model-vs-market bars, scoreline heatmap,
-                           head-to-head history, and the verdict.
+  1. match_dashboard    - one printed sheet per fixture: model-vs-market
+                          bars, scoreline heatmap, head-to-head, verdict.
   2. calibration_curve  - reliability plot built from predictions_log.csv
-  3. accuracy_scoreboard - win-count KPI card
+  3. accuracy_scoreboard - win-count KPI sheet (pure HTML, no chart)
 
-Rendering pipeline: Plotly still draws every chart (bars, heatmap, curve,
-KPI number) exactly as before - kaleido rasterizes each to a transparent
-PNG, which gets embedded into an HTML "glass card" template, and
-Playwright's headless Chromium screenshots the assembled page. Plotly
-alone can't do frosted-glass/backdrop-blur; CSS can, so the two are
-combined rather than reimplementing the charts in a new stack.
+Rendering pipeline: Plotly draws the charts, kaleido rasterizes each to a
+transparent PNG, the PNGs get embedded into an HTML sheet, and Playwright's
+headless Chromium screenshots the assembled page.
 
-Design language: Linear/Notion dark aesthetic + data-ink discipline
-(principles borrowed from indi256s/dataviz-skill and Anthropic's
-data-visualization skill):
-  - Data-ink ratio is sacred - every gridline/border earns its place.
-  - Titles are conclusions ("City strongly favoured"), not axis labels.
-  - Gray is the default; ONE accent colour highlights the actual story
-    (the favoured outcome), everything else recedes to grayscale - this
-    also means colour is never the only signal (labels always present),
-    satisfying colourblind-safety by construction.
-  - Sequential, single-hue colour scales for the heatmap (never a
-    red/green diverging scale) - also colourblind-safe by construction.
+Design language: the `mono-color` editorial print system
+(github.com/yanliudesign/mono-color-skill) applied to a data sheet:
+
+  - Substrate: pale beige paper, never a screen-dark canvas.
+  - Exactly TWO inks: charcoal carries 70-85% of the marks, signal red is
+    the single accent reserved for the story (the favoured outcome).
+    Everything else is a *screen* (a tint) of charcoal, not a new colour.
+  - Composition `ruled_information`: headline and facts share one rule,
+    blocks are separated by hairlines, not boxes. No glass, no shadows,
+    no gradients, no rounded corners - a print sheet has none of those.
+  - Typography `programmatic`: grotesk display, mono support type,
+    numerals as anchors. Titles are conclusions, not axis labels.
+  - One focal event per sheet (the verdict), one release zone (open paper).
+  - Because colour is a tint ladder plus one accent, every chart still
+    reads in greyscale, and labels are always present - colourblind-safe
+    by construction.
 """
 from __future__ import annotations
 import base64
+from html import escape as e
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -37,81 +39,138 @@ from playwright.sync_api import sync_playwright
 CANVAS_W, CANVAS_H = 1920, 1080
 SUB_SCALE = 2  # oversample embedded Plotly PNGs so they stay crisp at CSS display size
 
-# ---- Linear-style dark palette ---------------------------------------
-BG = "#08090a"            # Linear's near-black canvas
-PANEL = "#0f1115"
-BORDER = "#1c1f26"
-GRID = "#181b21"
-FG = "#f7f8f8"
-MUTED = "#8a8f98"         # Linear's muted label gray
-GRAY_FILL = "#2a2e37"     # de-emphasised series - "gray is your best friend"
-GRAY_FILL_2 = "#3d434f"   # second de-emphasised series, distinguishable in greyscale
-ACCENT = "#5e6ad2"        # Linear purple - the ONE highlight colour
-ACCENT_SOFT = "#8f97e8"
-MARKET = "#c7ccd4"
+# ---- mono-color: substrate_pale_beige + palette_charcoal_signal_red ----
+PAPER = "#F5F1E8"      # substrate - not an ink
+INK = "#30343A"        # ink_charcoal   - dominant ink, 70-85% of the marks
+ACCENT = "#C83232"     # ink_signal_red - the ONE accent, reserved for the story
+MUTED = "#6E6960"      # 60% charcoal screen, for mono microcopy
+HAIR = "#C8C1B5"       # hairline rule, paper-toned
+SCREEN_1 = "#B4B1AB"   # ~32% charcoal screen - de-emphasised series
+SCREEN_2 = "#8E8B85"   # ~55% charcoal screen - second de-emphasised series
 
 WATERMARK = "@nineshoot"   # set to "" to disable
 
-# single-hue sequential scale (dark -> Linear purple), colourblind-safe
+# Charcoal screen ladder for the scoreline plate. Capped at a 45% screen so
+# solid-charcoal numerals stay >=4.5:1 on the darkest cell - in print terms,
+# image plates are screened and solid ink is reserved for type.
 HEAT_SCALE = [
-    [0.0, "#111318"], [0.15, "#1c1f3d"], [0.35, "#2f3480"],
-    [0.6, "#4750c4"], [0.8, "#5e6ad2"], [1.0, "#b8bdf5"],
+    [0.0, PAPER], [0.2, "#E5E2DA"], [0.4, "#D2CFC9"],
+    [0.6, "#C0BEB9"], [0.8, "#AEADA9"], [1.0, "#9C9B9A"],
 ]
 
-_CARD_CSS = """
+DISPLAY = "Archivo, 'Ubuntu Sans', 'DejaVu Sans', Helvetica, sans-serif"
+MONO = "'Space Mono', 'DejaVu Sans Mono', 'Ubuntu Mono', monospace"
+PLOT_FONT = "DejaVu Sans Mono, monospace"  # kaleido sees system fonts only
+
+_CSS = """
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
     width: __W__px; height: __H__px; position: relative; overflow: hidden;
-    background: radial-gradient(circle at 12% 8%, #14162a 0%, __BG__ 45%, #050506 100%);
-    font-family: Inter, -apple-system, Arial, sans-serif;
-    color: __FG__;
-    padding: 40px;
-    display: flex; flex-direction: column; gap: 22px;
+    background: __PAPER__; color: __INK__;
+    font-family: __DISPLAY__;
+    padding: 52px 64px 40px;
+    display: flex; flex-direction: column;
+    -webkit-font-smoothing: antialiased;
   }
-  .header { flex-shrink: 0; }
-  .header h1 { font-size: 32px; font-weight: 700; margin-bottom: 4px; }
-  .header p { font-size: 16px; color: __MUTED__; }
-  .grid {
-    flex: 1; min-height: 0; display: grid;
-    grid-template-columns: 1fr 1fr; grid-template-rows: 1.15fr 0.85fr;
-    gap: 20px;
+  /* paper grain - the substrate is printed on, not emitted */
+  body::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0.055;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
-  .grid.solo { grid-template-columns: 1fr; grid-template-rows: 1fr; }
-  .card {
-    position: relative; min-height: 0; border-radius: 20px;
-    background: linear-gradient(160deg, rgba(255,255,255,0.07), rgba(255,255,255,0.015));
-    border: 1px solid rgba(255,255,255,0.09);
-    box-shadow: 0 24px 48px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06);
-    backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
-    padding: 20px 26px; display: flex; flex-direction: column; overflow: hidden;
+  .micro {
+    font-family: __MONO__; font-size: 12px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: __MUTED__;
+    display: flex; justify-content: space-between; align-items: baseline;
   }
-  .card .eyebrow {
-    font-size: 12px; letter-spacing: 0.08em; color: __MUTED__;
-    text-transform: uppercase; font-weight: 600; margin-bottom: 6px; flex-shrink: 0;
+  .micro .ix { color: __ACCENT__; font-weight: 700; }
+  .rule { height: 3px; background: __INK__; margin: 10px 0 22px; flex-shrink: 0; }
+  h1 {
+    font-size: 52px; font-weight: 700; line-height: 1.04;
+    letter-spacing: -0.018em; max-width: 1240px;
   }
-  .card img { flex: 1; min-height: 0; width: 100%; height: 100%; object-fit: contain; }
-  .h2h-list { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 12px; }
-  .h2h-row { display: flex; justify-content: space-between; font-size: 18px; }
-  .h2h-row .date { color: __MUTED__; }
-  .h2h-row .score { font-weight: 600; }
-  .h2h-empty { margin: auto; color: __MUTED__; font-size: 16px; }
-  .verdict { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
-  .verdict .big {
-    font-size: 78px; font-weight: 800; color: __ACCENT__;
-    text-shadow: 0 0 44px rgba(94,106,210,0.55); text-align: center;
+  .sub {
+    font-family: __MONO__; font-size: 14px; letter-spacing: 0.2em;
+    text-transform: uppercase; color: __INK__; margin-top: 12px;
   }
-  .verdict .sub { font-size: 20px; color: __MUTED__; }
-  .watermark { position: absolute; bottom: 18px; right: 26px; font-size: 13px; color: __MUTED__; }
+  .blocks {
+    flex: 1; min-height: 0; display: grid; margin-top: 26px;
+    grid-template-columns: 1fr 1fr; grid-template-rows: 1.1fr 0.9fr;
+    column-gap: 56px; row-gap: 22px;
+  }
+  .blocks.solo { grid-template-columns: 1fr; grid-template-rows: 1fr; }
+  .block {
+    min-height: 0; display: flex; flex-direction: column;
+    border-top: 1px solid __HAIR__; padding-top: 12px;
+  }
+  .block > .micro { flex-shrink: 0; margin-bottom: 8px; }
+  .block img { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
+
+  /* head-to-head: a ruled table, the way a results page is actually set */
+  .h2h { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; }
+  .h2h-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 11px 2px; border-bottom: 1px dotted __HAIR__;
+    font-family: __MONO__; font-size: 17px;
+  }
+  .h2h-row .date { color: __MUTED__; font-size: 13px; letter-spacing: 0.08em; }
+  .h2h-empty { margin: auto; font-family: __MONO__; font-size: 15px; color: __MUTED__; }
+
+  /* the focal event */
+  .verdict { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; }
+  .verdict .name {
+    font-weight: 800; line-height: 0.92; letter-spacing: -0.035em;
+    text-transform: uppercase; color: __ACCENT__;
+  }
+  .verdict .plate { height: 12px; background: __ACCENT__; margin: 16px 0 14px; width: 62%; }
+  .verdict .pct {
+    font-size: 92px; font-weight: 700; line-height: 1;
+    letter-spacing: -0.04em; font-variant-numeric: tabular-nums;
+    display: flex; align-items: baseline; gap: 4px;
+  }
+  .verdict .pct em { font-style: normal; font-size: 40px; font-weight: 500; color: __MUTED__; }
+  .verdict .note {
+    font-family: __MONO__; font-size: 12px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: __MUTED__; margin-top: 12px;
+  }
+
+  /* KPI sheet */
+  .kpi {
+    flex: 1; min-height: 0; display: grid; align-items: center;
+    grid-template-columns: auto 1fr; gap: 96px;
+  }
+  .kpi .big {
+    font-size: 300px; font-weight: 800; line-height: 0.82;
+    letter-spacing: -0.055em; color: __ACCENT__;
+    font-variant-numeric: tabular-nums; padding: 34px 52px 52px;
+    /* the numeral prints over a screened halftone plate */
+    background-image: radial-gradient(__HAIR__ 1.2px, transparent 1.3px);
+    background-size: 8px 8px;
+  }
+  .kpi .big em { font-style: normal; font-size: 124px; }
+  .kpi table { width: 100%; border-collapse: collapse; font-family: __MONO__; font-size: 26px; }
+  .kpi td { padding: 22px 0; border-bottom: 1px solid __HAIR__; }
+  .kpi td.n { text-align: right; font-weight: 700; }
+  .kpi caption {
+    text-align: left; font-family: __MONO__; font-size: 12px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: __MUTED__; padding-bottom: 14px;
+  }
+
+  footer { flex-shrink: 0; margin-top: 20px; border-top: 1px solid __HAIR__; padding-top: 10px; }
 </style>
 """
 
 
-def _card_css(width: int, height: int) -> str:
-    return (_CARD_CSS
-            .replace("__W__", str(width)).replace("__H__", str(height))
-            .replace("__BG__", BG).replace("__FG__", FG)
-            .replace("__MUTED__", MUTED).replace("__ACCENT__", ACCENT))
+def _css(width: int, height: int) -> str:
+    subs = {"__W__": str(width), "__H__": str(height), "__PAPER__": PAPER,
+            "__INK__": INK, "__ACCENT__": ACCENT, "__MUTED__": MUTED,
+            "__HAIR__": HAIR, "__DISPLAY__": DISPLAY, "__MONO__": MONO}
+    css = _CSS
+    for k, v in subs.items():
+        css = css.replace(k, v)
+    return css
 
 
 def _fig_png_datauri(fig: go.Figure, width: int, height: int) -> str:
@@ -132,12 +191,28 @@ def _render_html(html: str, out: str, width: int = CANVAS_W, height: int = CANVA
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": width, "height": height})
         page.set_content(html, wait_until="networkidle")
+        page.evaluate("document.fonts.ready")  # webfonts land before the shutter
         page.screenshot(path=out)
         browser.close()
 
 
-def _page(body: str, width: int = CANVAS_W, height: int = CANVAS_H) -> str:
-    return f"<html><head>{_card_css(width, height)}</head><body>{body}</body></html>"
+def _sheet(kicker: str, meta: str, title: str, sub: str, blocks: str,
+           solo: bool = False, width: int = CANVAS_W, height: int = CANVAS_H) -> str:
+    """One printed sheet: mono masthead, heavy rule, headline, ruled blocks, colophon."""
+    return f"""<html><head>{_css(width, height)}</head><body>
+      <div class="micro"><span><span class="ix">■</span>&nbsp;&nbsp;{kicker}</span><span>{meta}</span></div>
+      <div class="rule"></div>
+      <h1>{title}</h1>
+      <div class="sub">{sub}</div>
+      <div class="blocks{' solo' if solo else ''}">{blocks}</div>
+      <footer><div class="micro"><span>{WATERMARK}</span>
+        <span>Dixon–Coles · two-ink print</span></div></footer>
+    </body></html>"""
+
+
+def _block(n: str, label: str, meta: str, inner: str) -> str:
+    return (f'<div class="block"><div class="micro"><span><span class="ix">{n}</span>'
+            f'&nbsp;&nbsp;{label}</span><span>{meta}</span></div>{inner}</div>')
 
 
 def _insight_title(p_home: float, p_draw: float, p_away: float,
@@ -154,60 +229,65 @@ def _insight_title(p_home: float, p_draw: float, p_away: float,
     return f"{home} vs {away} — tight matchup"
 
 
+def _axes(fig: go.Figure) -> None:
+    """One ink, hairline rules, mono numerals - no chartjunk on paper."""
+    fig.update_xaxes(showgrid=False, zeroline=False, color=INK,
+                     linecolor=INK, linewidth=1, ticks="outside",
+                     tickcolor=HAIR, ticklen=5)
+    fig.update_yaxes(gridcolor=HAIR, gridwidth=1, zeroline=False, color=INK,
+                     showline=False, ticks="")
+    fig.update_layout(font=dict(color=INK, family=PLOT_FONT, size=13))
+
+
 def _heatmap_fig(grid, home: str, away: str) -> go.Figure:
     g = np.asarray(grid)[:4, :4]  # 0-3 goals is the interesting corner at this scale
     ai, aj = np.unravel_index(np.argmax(g), g.shape)  # most likely scoreline
 
     fig = go.Figure(go.Heatmap(
         z=g * 100, colorscale=HEAT_SCALE, showscale=False,
-        text=np.round(g * 100, 1), texttemplate="%{text}",
-        textfont=dict(size=15, color=FG),
-        xgap=4, ygap=4))
-    fig.update_xaxes(title=f"{away} goals", dtick=1, gridcolor=GRID, zeroline=False, color=FG)
-    fig.update_yaxes(title=f"{home} goals", dtick=1, gridcolor=GRID, zeroline=False, color=FG)
-    fig.add_annotation(x=aj, y=ai, text="most likely", showarrow=True,
-                       arrowhead=2, arrowcolor=ACCENT_SOFT,
-                       font=dict(color=FG, size=12), ax=30, ay=-30)
-    fig.update_layout(
-        font=dict(color=FG, family="Inter, -apple-system, Arial", size=13),
-        margin=dict(l=55, r=10, t=10, b=45),
-    )
+        text=g * 100, texttemplate="%{text:.1f}",
+        textfont=dict(size=15, color=INK, family=PLOT_FONT),
+        xgap=5, ygap=5))
+    # the peak cell is registered in the accent ink, not by being darker
+    fig.add_shape(type="rect", x0=aj - 0.5, x1=aj + 0.5, y0=ai - 0.5, y1=ai + 0.5,
+                  line=dict(color=ACCENT, width=3))
+    fig.add_annotation(x=aj, y=ai + 0.5, text="MOST LIKELY", showarrow=False,
+                       bgcolor=PAPER, borderpad=3,
+                       font=dict(color=ACCENT, size=11, family=PLOT_FONT))
+    _axes(fig)
+    fig.update_xaxes(title=f"{away} goals".upper(), dtick=1, showline=False, ticks="")
+    fig.update_yaxes(title=f"{home} goals".upper(), dtick=1, gridcolor="rgba(0,0,0,0)")
+    fig.update_layout(margin=dict(l=62, r=10, t=8, b=46))
     return fig
 
 
 def _market_fig(pred: dict, market: dict | None, home: str, away: str) -> go.Figure:
-    labels = [home, "Draw", away]
+    labels = [home.upper(), "DRAW", away.upper()]
     model = [pred["p_home"] * 100, pred["p_draw"] * 100, pred["p_away"] * 100]
 
     best_idx = int(np.argmax(model))
-    grays = [GRAY_FILL, GRAY_FILL_2]
-    colors = [ACCENT if i == best_idx else grays[i % 2] for i in range(3)]
+    screens = [SCREEN_1, SCREEN_2]
+    # one accent for the story; everything else is a screen of the same ink
+    colors = [ACCENT if i == best_idx else screens[i % 2] for i in range(3)]
 
     fig = go.Figure()
     fig.add_bar(x=labels, y=model, name="Model", marker_color=colors,
-               text=[f"{v:.0f}%" for v in model],
-               textposition="inside", insidetextanchor="middle",
-               textfont=dict(size=16, color=FG), width=0.55,
-               cliponaxis=False, marker_line_width=0, showlegend=False)
-    legend = None
+                text=[f"{v:.0f}%" for v in model],
+                textposition="outside",  # numerals sit on the paper, always legible
+                textfont=dict(size=17, color=INK, family=PLOT_FONT),
+                width=0.5, cliponaxis=False, marker_line_width=0, showlegend=False)
     if market:
         mkt = [market["p_home"] * 100, market["p_draw"] * 100, market["p_away"] * 100]
-        fig.add_scatter(x=labels, y=mkt, mode="markers+text", name="Market",
-                        marker=dict(color=MARKET, size=14, symbol="diamond",
-                                   line=dict(color=BG, width=2)),
-                        text=[f"{v:.0f}%" for v in mkt],
-                        textposition="top center", textfont=dict(size=12, color=FG))
-        legend = dict(orientation="h", y=1.15, x=1, xanchor="right",
-                      bgcolor="rgba(0,0,0,0)", font=dict(color=MUTED, size=11))
+        # marker only: a second number this close to the bar's own label just
+        # collides with it, and the gap between diamond and bar is the point
+        fig.add_scatter(x=labels, y=mkt, mode="markers", name="MARKET",
+                        marker=dict(color=PAPER, size=16, symbol="diamond",
+                                    line=dict(color=INK, width=2)))
 
-    fig.update_yaxes(title="Probability %", range=[0, 108], gridcolor=GRID,
-                     zeroline=False, color=FG)
-    fig.update_xaxes(gridcolor=GRID, zeroline=False, color=FG)
-    fig.update_layout(
-        font=dict(color=FG, family="Inter, -apple-system, Arial", size=13),
-        margin=dict(l=55, r=10, t=10, b=35),
-        legend=legend, bargap=0.4,
-    )
+    _axes(fig)
+    fig.update_yaxes(title="PROBABILITY %", range=[0, 112])
+    fig.update_layout(margin=dict(l=64, r=10, t=16, b=38),
+                      showlegend=False, bargap=0.45)
     return fig
 
 
@@ -238,86 +318,39 @@ def _calibration_fig(log_path: str, bins: int) -> tuple[go.Figure | None, dict |
     mae = float(np.average(np.abs(agg["pred"] - agg["actual"]), weights=agg["n"]))
 
     fig = go.Figure()
-    fig.add_scatter(x=[0, 1], y=[0, 1], mode="lines", name="Perfect calibration",
-                    line=dict(color=MUTED, dash="dash", width=1.5))
+    fig.add_scatter(x=[0, 1], y=[0, 1], mode="lines", name="PERFECT CALIBRATION",
+                    line=dict(color=SCREEN_2, dash="dash", width=1.5))
     fig.add_scatter(x=agg["pred"], y=agg["actual"], mode="markers+lines",
-                    name="Model", line=dict(color=ACCENT, width=3),
-                    marker=dict(color=ACCENT, size=13,
-                               line=dict(color=BG, width=1.5)))
-    fig.update_xaxes(title="Predicted probability", range=[0, 1],
-                     gridcolor=GRID, zeroline=False, tickformat=".0%", color=FG)
-    fig.update_yaxes(title="Actual hit rate", range=[0, 1],
-                     gridcolor=GRID, zeroline=False, tickformat=".0%", color=FG)
+                    name="MODEL", line=dict(color=ACCENT, width=3),
+                    marker=dict(color=ACCENT, size=12,
+                                line=dict(color=PAPER, width=2)))
+    _axes(fig)
+    fig.update_xaxes(title="PREDICTED PROBABILITY", range=[0, 1], tickformat=".0%")
+    fig.update_yaxes(title="ACTUAL HIT RATE", range=[0, 1], tickformat=".0%")
     fig.update_layout(
-        font=dict(color=FG, family="Inter, -apple-system, Arial", size=14),
-        margin=dict(l=60, r=30, t=20, b=55),
-        legend=dict(orientation="h", y=1.1, x=1, xanchor="right", bgcolor="rgba(0,0,0,0)"),
-    )
+        margin=dict(l=72, r=30, t=30, b=58),
+        legend=dict(orientation="h", y=1.12, x=1, xanchor="right",
+                    bgcolor="rgba(0,0,0,0)",
+                    font=dict(color=MUTED, size=11, family=PLOT_FONT)))
     title = f"Model is off by {mae*100:.1f} points on average" if mae >= 0.02 \
         else "Model tracks its own confidence closely"
-    subtitle = f"{int(agg['n'].sum())} settled outcomes, {bins} buckets"
+    subtitle = f"{int(agg['n'].sum())} settled outcomes · {bins} buckets"
     return fig, {"title": title, "subtitle": subtitle}
 
 
-def _scoreboard_fig(stats: dict) -> go.Figure:
-    total, wins, rate = stats["total"], stats["wins"], stats["win_rate"]
-
-    fig = go.Figure()
-    fig.add_trace(go.Indicator(
-        mode="number", value=rate * 100,
-        number=dict(suffix="%", font=dict(size=130, color=ACCENT)),
-        domain=dict(x=[0, 1], y=[0.4, 1]),
-    ))
-    fig.add_annotation(
-        text=f"{wins} / {total} correct picks", xref="paper", yref="paper",
-        x=0.5, y=0.3, xanchor="center", showarrow=False,
-        font=dict(size=24, color=FG))
-
-    order = ["H", "D", "A"]
-    display_names = {"H": "Home picks", "D": "Draw picks", "A": "Away picks"}
-    by = stats["by_outcome"]
-    parts = []
-    for k in order:
-        if k in by and by[k]["n"] > 0:
-            n, hits = int(by[k]["n"]), int(by[k]["hits"])
-            parts.append(f"{display_names[k]}: {hits}/{n}")
-    if parts:
-        fig.add_annotation(
-            text="   ·   ".join(parts), xref="paper", yref="paper",
-            x=0.5, y=0.15, xanchor="center", showarrow=False,
-            font=dict(size=17, color=MUTED))
-
-    fig.update_layout(
-        font=dict(color=FG, family="Inter, -apple-system, Arial"),
-        margin=dict(l=20, r=20, t=20, b=20),
-    )
-    return fig
-
-
-def _single_card_body(eyebrow: str, img_uri: str, title: str, subtitle: str) -> str:
-    return f"""
-    <div class="header"><h1>{title}</h1><p>{subtitle}</p></div>
-    <div class="grid solo">
-      <div class="card">
-        <div class="eyebrow">{eyebrow}</div>
-        <img src="{img_uri}">
-      </div>
-    </div>
-    <div class="watermark">{WATERMARK}</div>
-    """
-
-
 def match_dashboard(pred: dict, market: dict | None, home: str, away: str,
-                    h2h: list[dict], out: str) -> None:
-    """One glass-card 2x2 image per fixture: model vs market, scoreline
-    heatmap, head-to-head history, and the verdict."""
-    market_uri = _fig_png_datauri(_market_fig(pred, market, home, away), 860, 460)
-    heat_uri = _fig_png_datauri(_heatmap_fig(pred["_grid"], home, away), 860, 460)
+                    h2h: list[dict], out: str,
+                    league: str = "", date: str = "") -> None:
+    """One printed sheet per fixture: model vs market, scoreline plate,
+    head-to-head, and the verdict as the focal event."""
+    # matches the block aspect so `object-fit: contain` has nothing to letterbox
+    market_uri = _fig_png_datauri(_market_fig(pred, market, home, away), 868, 380)
+    heat_uri = _fig_png_datauri(_heatmap_fig(pred["_grid"], home, away), 868, 380)
 
     if h2h:
         h2h_html = "".join(
-            f'<div class="h2h-row"><span class="date">{r["date"]}</span>'
-            f'<span class="score">{r["line"]}</span></div>' for r in h2h)
+            f'<div class="h2h-row"><span class="date">{e(r["date"])}</span>'
+            f'<span class="score">{e(r["line"])}</span></div>' for r in h2h)
     else:
         h2h_html = '<div class="h2h-empty">No meetings in the last 2 seasons</div>'
 
@@ -328,35 +361,28 @@ def match_dashboard(pred: dict, market: dict | None, home: str, away: str,
         verdict, verdict_p = home, pred["p_home"]
     else:
         verdict, verdict_p = away, pred["p_away"]
+    # display type is set to the word, not the other way round
+    name_px = 66 if len(verdict) <= 9 else 52 if len(verdict) <= 14 else 40
 
-    title = _insight_title(pred["p_home"], pred["p_draw"], pred["p_away"], home, away)
-
-    body = f"""
-    <div class="header"><h1>{title}</h1><p>{home} vs {away}</p></div>
-    <div class="grid">
-      <div class="card">
-        <div class="eyebrow">Model vs Market</div>
-        <img src="{market_uri}">
-      </div>
-      <div class="card">
-        <div class="eyebrow">Scoreline Probability (0-3 goals)</div>
-        <img src="{heat_uri}">
-      </div>
-      <div class="card">
-        <div class="eyebrow">Head-to-Head — Last 2 Seasons</div>
-        <div class="h2h-list">{h2h_html}</div>
-      </div>
-      <div class="card">
-        <div class="eyebrow">Verdict</div>
-        <div class="verdict">
-          <div class="big">{verdict}</div>
-          <div class="sub">{verdict_p*100:.0f}% probability</div>
-        </div>
-      </div>
-    </div>
-    <div class="watermark">{WATERMARK}</div>
-    """
-    _render_html(_page(body), out)
+    blocks = (
+        _block("01", "Model vs Market", "bars = model · ◇ = market", f'<img src="{market_uri}">')
+        + _block("02", "Scoreline Plate", "0–3 goals · %", f'<img src="{heat_uri}">')
+        + _block("03", "Head to Head", "last 2 seasons", f'<div class="h2h">{h2h_html}</div>')
+        + _block("04", "Verdict", "model pick", f"""
+            <div class="verdict">
+              <div class="name" style="font-size:{name_px}px">{e(verdict)}</div>
+              <div class="plate"></div>
+              <div class="pct">{verdict_p*100:.0f}<em>%</em></div>
+              <div class="note">probability · most likely outcome</div>
+            </div>""")
+    )
+    meta = f"{date} · match forecast" if date else "match forecast"
+    _render_html(_sheet(
+        kicker=e(league) or "Match forecast",
+        meta=e(meta),
+        title=e(_insight_title(pred["p_home"], pred["p_draw"], pred["p_away"], home, away)),
+        sub=f"{e(home)} &nbsp;vs&nbsp; {e(away)}",
+        blocks=blocks), out)
 
 
 def calibration_curve(log_path: str, out: str, bins: int = 10) -> None:
@@ -364,14 +390,68 @@ def calibration_curve(log_path: str, out: str, bins: int = 10) -> None:
     fig, meta = _calibration_fig(log_path, bins)
     if fig is None:
         return
-    img_uri = _fig_png_datauri(fig, 1600, 760)
-    body = _single_card_body("Calibration", img_uri, meta["title"], meta["subtitle"])
-    _render_html(_page(body), out)
+    img_uri = _fig_png_datauri(fig, 1660, 700)
+    _render_html(_sheet(
+        kicker="Calibration", meta="reliability plate",
+        title=meta["title"], sub=meta["subtitle"],
+        blocks=_block("01", "Predicted vs Actual", "all settled outcomes",
+                      f'<img src="{img_uri}">'),
+        solo=True), out)
 
 
 def accuracy_scoreboard(stats: dict, out: str) -> None:
-    """Linear-style KPI card: win count + win rate, big and readable."""
-    img_uri = _fig_png_datauri(_scoreboard_fig(stats), 1500, 700)
-    body = _single_card_body("Scoreboard", img_uri, "Model Hit Rate to Date",
-                             f"{stats['total']} settled predictions")
-    _render_html(_page(body), out)
+    """Hit-rate sheet. Pure HTML - a number and a ruled table need no chart."""
+    names = {"H": "Home picks", "D": "Draw picks", "A": "Away picks"}
+    by = stats["by_outcome"]
+    rows = "".join(
+        f'<tr><td>{names[k]}</td><td class="n">{int(by[k]["hits"])} / {int(by[k]["n"])}</td></tr>'
+        for k in ("H", "D", "A") if k in by and by[k]["n"] > 0)
+
+    _render_html(_sheet(
+        kicker="Scoreboard", meta="hit rate to date",
+        title="Model Hit Rate to Date",
+        sub=f"{stats['total']} settled predictions · {stats['wins']} correct",
+        blocks=_block("01", "Correct Picks", "1X2 · share", f"""
+            <div class="kpi">
+              <div class="big">{stats['win_rate']*100:.0f}<em>%</em></div>
+              <table><caption>By picked outcome</caption>{rows}</table>
+            </div>"""),
+        solo=True), out)
+
+
+def _demo() -> None:
+    """`python -m src.viz [outdir]` - self-check plus a preview of every sheet."""
+    import sys
+    import tempfile
+
+    # the four verdict branches, which are the only real logic on this page
+    assert "strongly favoured" in _insight_title(.70, .20, .10, "A", "B")
+    assert "real shot" in _insight_title(.50, .20, .30, "A", "B")
+    assert "too close to call" in _insight_title(.30, .40, .30, "A", "B")
+    assert "tight matchup" in _insight_title(.40, .20, .40, "A", "B")
+
+    # exactly one accent ink per chart - the whole point of a two-ink system
+    pred = {"p_home": .642, "p_draw": .221, "p_away": .137}
+    bars = _market_fig(pred, None, "A", "B").data[0].marker.color
+    assert list(bars).count(ACCENT) == 1, bars
+
+    grid = np.outer([.30, .36, .22, .09, .03], [.28, .35, .22, .11, .04])
+    pred["_grid"] = grid / grid.sum()
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(tempfile.mkdtemp())
+    out.mkdir(parents=True, exist_ok=True)
+    match_dashboard(pred, {"p_home": .60, "p_draw": .24, "p_away": .16}, "Man City",
+                    "Bournemouth",
+                    [{"date": "2026-02-11", "line": "Man City 2-1 Bournemouth"},
+                     {"date": "2025-09-21", "line": "Bournemouth 0-3 Man City"}],
+                    str(out / "sheet_match.png"),
+                    league="Premier League", date="2026-08-17")
+    accuracy_scoreboard(
+        {"total": 148, "wins": 79, "win_rate": .534,
+         "by_outcome": {"H": {"n": 71, "hits": 44}, "D": {"n": 22, "hits": 5},
+                        "A": {"n": 55, "hits": 30}}},
+        str(out / "sheet_scoreboard.png"))
+    print(f"ok - sheets in {out}")
+
+
+if __name__ == "__main__":
+    _demo()
