@@ -49,7 +49,7 @@ def run_league(code: str, name: str, cfg: dict) -> list[dict]:
 
     print(f"[{name}] fetching upcoming fixtures…")
     try:
-        fix = data.fixtures(code)
+        fix = data.fixtures(code, cfg["train_seasons"][-1])
     except Exception as e:
         print(f"  [warn] no fixtures for {code}: {e}")
         return []
