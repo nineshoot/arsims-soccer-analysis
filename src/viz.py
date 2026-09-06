@@ -30,6 +30,7 @@ scoreline matrix and a KPI have no type there, and it explicitly sends
 lists to a table. So this takes the design system, not the type grammar.
 """
 from __future__ import annotations
+import atexit
 from functools import cache
 from html import escape as e
 from itertools import count
@@ -72,7 +73,12 @@ PLOT_FONT = "DejaVu Sans Mono, monospace"  # a font the renderer always has
 
 _CSS = """
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- media=print keeps this off the critical path: a pending stylesheet in
+     <head> blocks the scripts after it, which blocks the parser, which
+     stops DOMContentLoaded firing at all - so an unreachable font CDN
+     would hang every render. The onload swaps it in when it does arrive. -->
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet" media="print" onload="this.media='all'">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -208,23 +214,46 @@ def _fig_html(fig: go.Figure, width: int, height: int) -> str:
             f'{fig.to_json()},{{}},{{staticPlot:true}}));</script>')
 
 
-def _render_html(html: str, out: str) -> None:
-    """Screenshot an HTML string to `out` with headless Chromium.
+FONT_WAIT_MS = 4000  # webfonts are a nicety; the stack falls back locally
 
-    ponytail: launches a fresh browser per call - simplest correct thing for
-    a weekly batch job. If per-fixture loops become a bottleneck, share one
-    browser/context across a run_league() call instead.
+
+@cache
+def _context():
+    """One browser context for the whole run, closed at exit.
+
+    Only the browser is shared. plotly.js still loads inside each page:
+    set_content replaces the whole document, and that throws away the
+    stylesheet Plotly injects into <head> when it loads, so a copy hoisted
+    into an init script leaves the charts unstyled and mispositioned.
     """
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H})
-        # "load" means every script has run, so __plots is complete - and it
-        # is legitimately empty on the sheets that carry no chart at all
-        page.set_content(html, wait_until="load")
+    pw = sync_playwright().start()
+    browser = pw.chromium.launch()
+    ctx = browser.new_context(viewport={"width": CANVAS_W, "height": CANVAS_H})
+    atexit.register(pw.stop)
+    atexit.register(browser.close)
+    return ctx
+
+
+def _render_html(html: str, out: str) -> None:
+    """Screenshot an HTML string to `out` with headless Chromium."""
+    page = _context().new_page()
+    try:
+        # NOT "load": that waits on the Google Fonts stylesheet, so a runner
+        # that cannot reach fonts.googleapis.com burns the full Playwright
+        # timeout on every single sheet and renders none of them. The DOM
+        # being parsed is all we need - inline scripts have run by then, so
+        # __plots is complete (and legitimately empty on chartless sheets).
+        page.set_content(html, wait_until="domcontentloaded")
         page.evaluate("Promise.all(window.__plots || [])")
-        page.evaluate("document.fonts.ready")  # webfonts land before the shutter
+        # Give webfonts a bounded moment, then shoot regardless. Falling back
+        # to the local stack is a cosmetic loss; waiting forever is not.
+        page.evaluate("""ms => Promise.race([
+            document.fonts.ready,
+            new Promise(r => setTimeout(r, ms)),
+        ])""", FONT_WAIT_MS)
         page.screenshot(path=out)
-        browser.close()
+    finally:
+        page.close()
 
 
 def _sheet(kicker: str, meta: str, title: str, sub: str, blocks: str,
