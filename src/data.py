@@ -49,12 +49,19 @@ _RENAME = {
     "FTAG": "goals_away",
 }
 
-# The site occasionally 503s under load - retry a few times with backoff
-# (2s, 4s, 8s) before giving up, instead of failing the whole league on
-# one bad request.
+# The site occasionally 503s under load.  Do not honour its Retry-After
+# header: it has returned hour-long values, which makes an unattended CI run
+# look hung inside urllib3.  Two bounded retries are enough to absorb a blip;
+# after that results() switches to the fallback source.
 _session = requests.Session()
 _retry_adapter = HTTPAdapter(max_retries=Retry(
-    total=3, backoff_factor=2, status_forcelist=[502, 503, 504]))
+    total=2,
+    backoff_factor=0.5,
+    backoff_max=2,
+    status_forcelist=[502, 503, 504],
+    allowed_methods=frozenset(["GET"]),
+    respect_retry_after_header=False,
+))
 _session.mount("https://", _retry_adapter)
 _session.mount("http://", _retry_adapter)
 
@@ -112,6 +119,15 @@ def results(code: str, seasons: list[str]) -> pd.DataFrame:
             frames.append(df)
         except Exception as e:  # a season file may not exist yet
             print(f"  [warn] {code} {season}: {e}")
+            # A missing season (404) is local to that URL, so try the next
+            # one.  A connection error or 5xx after the bounded retries means
+            # the primary service is unavailable; hammering every remaining
+            # season only repeats the same failure and delays the fallback.
+            response = getattr(e, "response", None)
+            status = getattr(response, "status_code", None)
+            if not frames and isinstance(e, requests.RequestException) \
+                    and (status is None or status >= 500):
+                break
 
     if not frames:
         print(f"  [warn] {code}: football-data.co.uk unreachable, "
@@ -183,6 +199,7 @@ def fixtures(code: str, season: str | None = None) -> pd.DataFrame:
 def _demo() -> None:
     """`python -m src.data` - checks both sources and the switch between them."""
     import threading
+    import time
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
     assert _of_season("2526") == "2025-26"
@@ -219,6 +236,35 @@ def _demo() -> None:
     assert "B365H" in hist.columns, "odds must survive for the market benchmark"
     assert "B365H" in fixtures("E0").columns
     srv.shutdown()
+
+    # A hostile Retry-After must never park CI for the requested hour.  The
+    # adapter should use only our short bounded backoff, then raise.
+    class _UnavailableStub(BaseHTTPRequestHandler):
+        calls = 0
+
+        def do_GET(self):
+            type(self).calls += 1
+            self.send_response(503)
+            self.send_header("Retry-After", "3600")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    unavailable = HTTPServer(("127.0.0.1", 0), _UnavailableStub)
+    threading.Thread(target=unavailable.serve_forever, daemon=True).start()
+    started = time.monotonic()
+    try:
+        _get_csv(f"http://127.0.0.1:{unavailable.server_port}/season.csv")
+        raise AssertionError("503 response should fail after bounded retries")
+    except requests.RequestException:
+        pass
+    finally:
+        unavailable.shutdown()
+    elapsed = time.monotonic() - started
+    assert _UnavailableStub.calls == 3, _UnavailableStub.calls
+    assert elapsed < 5, f"Retry-After was not bounded: {elapsed:.1f}s"
 
     # --- fallback: a URL requests refuses outright, so no retry wait
     SEASON_URL, FIXTURES_URL = "dead://{season}/{code}", "dead://fixtures"
