@@ -365,7 +365,9 @@ def match_dashboard(pred: dict, market: dict | None, home: str, away: str,
     name_px = 66 if len(verdict) <= 9 else 52 if len(verdict) <= 14 else 40
 
     blocks = (
-        _block("01", "Model vs Market", "bars = model · ◇ = market", f'<img src="{market_uri}">')
+        _block("01", "Model vs Market" if market else "Model Probability",
+               "bars = model · ◇ = market" if market else "1X2 · no odds for this source",
+               f'<img src="{market_uri}">')
         + _block("02", "Scoreline Plate", "0–3 goals · %", f'<img src="{heat_uri}">')
         + _block("03", "Head to Head", "last 2 seasons", f'<div class="h2h">{h2h_html}</div>')
         + _block("04", "Verdict", "model pick", f"""

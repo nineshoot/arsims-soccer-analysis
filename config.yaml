@@ -13,7 +13,7 @@ leagues:
 # Seasons to pull for TRAINING (football-data.co.uk 4-digit codes).
 # More history = more stable ratings, but older data matters less once
 # time-decay is on, so ~4 seasons is a sensible default.
-train_seasons: ["2223", "2324", "2425", "2526"]
+train_seasons: ["2324", "2425", "2526", "2627"]
 
 model:
   # Dixon-Coles time-decay. Higher xi = faster forgetting of old games.

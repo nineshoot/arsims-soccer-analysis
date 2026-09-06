@@ -38,15 +38,17 @@ calibration:
 |**GitHub Actions cron = the "automation"**|No Dataiku, no server, no bill. The green run-history *is* the automation.|
 |**Static PNGs (Plotly + Playwright)**|Drop straight into a video-editing pipeline — no dashboard to host, no server to run.|
 |**Retry-with-backoff on every fetch**|football-data.co.uk occasionally 503s under load. A transient blip shouldn't cost a whole week's predictions.|
+|**openfootball fallback when the site is down**|If retries are exhausted, results *and* fixtures switch to [openfootball/football.json](https://github.com/openfootball/football.json) (CC0, auto-updated daily, served off GitHub). No odds there, which the pipeline already treats as optional — a week without the market overlay beats a week with no predictions.|
 |**Concurrency-locked, rebase-before-push CI**|Two overlapping runs (schedule + manual dispatch) used to race on the final `git push` and fail the job outright.|
 
 ## How it works
 
 ```
-                 football-data.co.uk (results + odds, free)
+       football-data.co.uk (results + odds, free)
+         └── if unreachable: openfootball/football.json (no odds)
                               │
         ┌─────────────────────┴─────────────────────┐
-        │  scrape historical results  │  scrape upcoming fixtures │
+        │  historical results         │  upcoming fixtures        │
         │       (retried on 503)      │                           │
         └─────────────────────┬─────────────────────┘
                               │
