@@ -21,6 +21,8 @@ the BOM and picks the right decoding per-file.
 from __future__ import annotations
 import io
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import pandas as pd
 
 BASE = "https://www.football-data.co.uk"
@@ -37,9 +39,18 @@ _RENAME = {
     "FTR": "result",  # H / D / A
 }
 
+# The site occasionally 503s under load - retry a few times with backoff
+# (2s, 4s, 8s) before giving up, instead of failing the whole league on
+# one bad request.
+_session = requests.Session()
+_retry_adapter = HTTPAdapter(max_retries=Retry(
+    total=3, backoff_factor=2, status_forcelist=[502, 503, 504]))
+_session.mount("https://", _retry_adapter)
+_session.mount("http://", _retry_adapter)
+
 
 def _get_csv(url: str) -> pd.DataFrame:
-    r = requests.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
+    r = _session.get(url, timeout=30, headers={"User-Agent": "Mozilla/5.0"})
     r.raise_for_status()
     raw = r.content
     # BOM-aware decode: fixtures.csv ships UTF-8-BOM, season files are latin-1.
