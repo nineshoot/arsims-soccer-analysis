@@ -30,7 +30,9 @@ scoreline matrix and a KPI have no type there, and it explicitly sends
 lists to a table. So this takes the design system, not the type grammar.
 """
 from __future__ import annotations
+from functools import cache
 from html import escape as e
+from itertools import count
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -108,8 +110,10 @@ _CSS = """
     border-top: 1px solid __RULE__; padding-top: 12px;
   }
   .block > .micro { flex-shrink: 0; margin-bottom: 8px; }
-  .block img, .block .plot { flex: 1; min-height: 0; width: 100%; }
-  .block .plot { display: flex; align-items: center; justify-content: center; }
+  .block .plot {
+    flex: 1; min-height: 0; width: 100%;
+    display: flex; align-items: center; justify-content: center;
+  }
 
   /* head-to-head: a table, which is what the skill says a list should be */
   .h2h { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; }
@@ -164,8 +168,8 @@ _CSS = """
 """
 
 
-def _css(width: int, height: int) -> str:
-    subs = {"__W__": str(width), "__H__": str(height), "__PAPER__": PAPER,
+def _css() -> str:
+    subs = {"__W__": str(CANVAS_W), "__H__": str(CANVAS_H), "__PAPER__": PAPER,
             "__INK__": INK, "__ACCENT__": ACCENT, "__MUTED__": MUTED,
             "__SOFT__": SOFT, "__RULE__": RULE, "__RULE_SOLID__": RULE_SOLID,
             "__DISPLAY__": DISPLAY, "__SERIF__": SERIF, "__MONO__": MONO}
@@ -175,21 +179,18 @@ def _css(width: int, height: int) -> str:
     return css
 
 
+@cache
 def _plotlyjs() -> str:
     """plotly.min.js as it ships inside the installed plotly package.
 
     Inlined rather than pulled from a CDN so a render never depends on the
-    network, and read once per process rather than per figure.
+    network, and cached so the 4.6MB read happens once per process.
     """
-    global _PLOTLY_JS
-    if _PLOTLY_JS is None:
-        _PLOTLY_JS = (Path(plotly.__file__).parent / "package_data"
-                      / "plotly.min.js").read_text(encoding="utf-8")
-    return _PLOTLY_JS
+    return (Path(plotly.__file__).parent / "package_data"
+            / "plotly.min.js").read_text(encoding="utf-8")
 
 
-_PLOTLY_JS: str | None = None
-_plot_n = 0
+_plot_ids = count(1)
 
 
 def _fig_html(fig: go.Figure, width: int, height: int) -> str:
@@ -199,9 +200,7 @@ def _fig_html(fig: go.Figure, width: int, height: int) -> str:
     drawn there too — no kaleido, no second browser, and the chart lands as
     vector SVG in the DOM instead of a rasterised PNG pasted into an <img>.
     """
-    global _plot_n
-    _plot_n += 1
-    div = f"plot{_plot_n}"
+    div = f"plot{next(_plot_ids)}"
     fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                       width=width, height=height, autosize=False)
     return (f'<div class="plot" id="{div}"></div>'
@@ -209,7 +208,7 @@ def _fig_html(fig: go.Figure, width: int, height: int) -> str:
             f'{fig.to_json()},{{}},{{staticPlot:true}}));</script>')
 
 
-def _render_html(html: str, out: str, width: int = CANVAS_W, height: int = CANVAS_H) -> None:
+def _render_html(html: str, out: str) -> None:
     """Screenshot an HTML string to `out` with headless Chromium.
 
     ponytail: launches a fresh browser per call - simplest correct thing for
@@ -218,7 +217,7 @@ def _render_html(html: str, out: str, width: int = CANVAS_W, height: int = CANVA
     """
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": width, "height": height})
+        page = browser.new_page(viewport={"width": CANVAS_W, "height": CANVAS_H})
         # "load" means every script has run, so __plots is complete - and it
         # is legitimately empty on the sheets that carry no chart at all
         page.set_content(html, wait_until="load")
@@ -229,9 +228,9 @@ def _render_html(html: str, out: str, width: int = CANVAS_W, height: int = CANVA
 
 
 def _sheet(kicker: str, meta: str, title: str, sub: str, blocks: str,
-           solo: bool = False, width: int = CANVAS_W, height: int = CANVAS_H) -> str:
+           solo: bool = False) -> str:
     """One printed sheet: mono masthead, heavy rule, headline, ruled blocks, colophon."""
-    return f"""<html><head>{_css(width, height)}
+    return f"""<html><head>{_css()}
       <script>window.__plots=[];</script>
       <script>{_plotlyjs()}</script></head><body>
       <div class="micro"><span><span class="ix">■</span>&nbsp;&nbsp;{kicker}</span><span>{meta}</span></div>
@@ -249,13 +248,24 @@ def _block(n: str, label: str, meta: str, inner: str) -> str:
             f'&nbsp;&nbsp;{label}</span><span>{meta}</span></div>{inner}</div>')
 
 
-def _insight_title(p_home: float, p_draw: float, p_away: float,
-                   home: str, away: str) -> str:
+def _best(pred: dict) -> int:
+    """Index of the most likely outcome: 0 home, 1 draw, 2 away.
+
+    A tie reads as a draw, which is what "too close to call" means - and it
+    keeps the headline, the focal bar and the verdict picking the same
+    outcome, which three separate argmaxes did not guarantee.
+    """
+    ps = [pred["p_home"], pred["p_draw"], pred["p_away"]]
+    return 1 if ps[1] == max(ps) else max(range(3), key=ps.__getitem__)
+
+
+def _insight_title(pred: dict, home: str, away: str) -> str:
     """Lead with the story, not the axis labels."""
-    best = max(p_home, p_draw, p_away)
-    if best == p_draw:
+    i = _best(pred)
+    if i == 1:
         return f"{home} vs {away} — too close to call"
-    fav, dog, p = (home, away, p_home) if best == p_home else (away, home, p_away)
+    fav, dog, p = ((home, away, pred["p_home"]) if i == 0
+                   else (away, home, pred["p_away"]))
     if p >= 0.60:
         return f"{fav} strongly favoured over {dog}"
     if p >= 0.45:
@@ -301,10 +311,10 @@ def _market_fig(pred: dict, market: dict | None, home: str, away: str) -> go.Fig
     model = [pred["p_home"] * 100, pred["p_draw"] * 100, pred["p_away"] * 100]
 
     # exactly one focal bar; the rest take the non-focal series treatment
-    best_idx = int(np.argmax(model))
-    fills = [ACCENT_TINT if i == best_idx else SERIES for i in range(3)]
-    lines = [ACCENT if i == best_idx else MUTED for i in range(3)]
-    label_ink = [ACCENT if i == best_idx else MUTED for i in range(3)]
+    focal = _best(pred)
+    fills, lines, label_ink = zip(*(
+        (ACCENT_TINT, ACCENT, ACCENT) if i == focal else (SERIES, MUTED, MUTED)
+        for i in range(3)))
 
     fig = go.Figure()
     fig.add_bar(x=labels, y=model, name="Model", marker_color=fills,
@@ -400,13 +410,9 @@ def match_dashboard(pred: dict, market: dict | None, home: str, away: str,
     else:
         h2h_html = '<div class="h2h-empty">No meetings in the last 2 seasons</div>'
 
-    best = max(pred["p_home"], pred["p_draw"], pred["p_away"])
-    if best == pred["p_draw"]:
-        verdict, verdict_p = "Draw", pred["p_draw"]
-    elif best == pred["p_home"]:
-        verdict, verdict_p = home, pred["p_home"]
-    else:
-        verdict, verdict_p = away, pred["p_away"]
+    i = _best(pred)
+    verdict = (home, "Draw", away)[i]
+    verdict_p = (pred["p_home"], pred["p_draw"], pred["p_away"])[i]
     # display type is set to the word, not the other way round
     name_px = 64 if len(verdict) <= 9 else 48 if len(verdict) <= 14 else 40
 
@@ -428,7 +434,7 @@ def match_dashboard(pred: dict, market: dict | None, home: str, away: str,
     _render_html(_sheet(
         kicker=e(league) or "Match forecast",
         meta=e(meta),
-        title=e(_insight_title(pred["p_home"], pred["p_draw"], pred["p_away"], home, away)),
+        title=e(_insight_title(pred, home, away)),
         sub=f"{e(home)} &nbsp;vs&nbsp; {e(away)}",
         blocks=blocks), out)
 
@@ -473,10 +479,14 @@ def _demo() -> None:
     import tempfile
 
     # the four verdict branches, which are the only real logic on this page
-    assert "strongly favoured" in _insight_title(.70, .20, .10, "A", "B")
-    assert "real shot" in _insight_title(.50, .20, .30, "A", "B")
-    assert "too close to call" in _insight_title(.30, .40, .30, "A", "B")
-    assert "tight matchup" in _insight_title(.40, .20, .40, "A", "B")
+    def p3(h, d, a):
+        return {"p_home": h, "p_draw": d, "p_away": a}
+    assert "strongly favoured" in _insight_title(p3(.70, .20, .10), "A", "B")
+    assert "real shot" in _insight_title(p3(.50, .20, .30), "A", "B")
+    assert "too close to call" in _insight_title(p3(.30, .40, .30), "A", "B")
+    assert "tight matchup" in _insight_title(p3(.40, .20, .40), "A", "B")
+    # headline, focal bar and verdict must agree on the pick
+    assert _best(p3(.40, .40, .20)) == 1, "a tie reads as a draw everywhere"
 
     # exactly one focal bar - diagram-design allows 1-2 accents, never 3
     pred = {"p_home": .642, "p_draw": .221, "p_away": .137}
