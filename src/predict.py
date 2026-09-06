@@ -91,8 +91,8 @@ def run_league(code: str, name: str, cfg: dict) -> list[dict]:
                                 league=name, date=f["date"].date().isoformat())
         except Exception as e:
             # Chart rendering is a nice-to-have, not the source of truth —
-            # a failure here (e.g. a broken kaleido/playwright install on
-            # some CI runner) must never cost us the numeric prediction,
+            # a failure here (e.g. a broken playwright install on some CI
+            # runner) must never cost us the numeric prediction,
             # which is already in `rows` and is what predictions_log.csv
             # depends on.
             print(f"  [warn] dashboard render failed for {home} vs {away}: {e}")

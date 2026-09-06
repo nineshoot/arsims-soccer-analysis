@@ -6,9 +6,10 @@ Static, high-res PNGs for the video pipeline. Three outputs:
   2. calibration_curve  - reliability plot built from predictions_log.csv
   3. accuracy_scoreboard - win-count KPI sheet (pure HTML, no chart)
 
-Rendering pipeline: Plotly draws the charts, kaleido rasterizes each to a
-transparent PNG, the PNGs get embedded into an HTML sheet, and Playwright's
-headless Chromium screenshots the assembled page.
+Rendering pipeline: the sheet is an HTML page that Playwright's headless
+Chromium screenshots. The Plotly charts are drawn by plotly.js inside that
+same page - no kaleido, no second browser to install, and the charts land
+as vector SVG in the DOM rather than a rasterised PNG in an <img>.
 
 Design language: the `mono-color` editorial print system
 (github.com/yanliudesign/mono-color-skill) applied to a data sheet:
@@ -28,16 +29,15 @@ Design language: the `mono-color` editorial print system
     by construction.
 """
 from __future__ import annotations
-import base64
 from html import escape as e
 from pathlib import Path
 import numpy as np
 import pandas as pd
+import plotly
 import plotly.graph_objects as go
 from playwright.sync_api import sync_playwright
 
 CANVAS_W, CANVAS_H = 1920, 1080
-SUB_SCALE = 2  # oversample embedded Plotly PNGs so they stay crisp at CSS display size
 
 # ---- mono-color: substrate_pale_beige + palette_charcoal_signal_red ----
 PAPER = "#F5F1E8"      # substrate - not an ink
@@ -60,7 +60,7 @@ HEAT_SCALE = [
 
 DISPLAY = "Archivo, 'Ubuntu Sans', 'DejaVu Sans', Helvetica, sans-serif"
 MONO = "'Space Mono', 'DejaVu Sans Mono', 'Ubuntu Mono', monospace"
-PLOT_FONT = "DejaVu Sans Mono, monospace"  # kaleido sees system fonts only
+PLOT_FONT = "DejaVu Sans Mono, monospace"  # a font the renderer always has
 
 _CSS = """
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -106,7 +106,8 @@ _CSS = """
     border-top: 1px solid __HAIR__; padding-top: 12px;
   }
   .block > .micro { flex-shrink: 0; margin-bottom: 8px; }
-  .block img { flex: 1; min-height: 0; width: 100%; object-fit: contain; }
+  .block img, .block .plot { flex: 1; min-height: 0; width: 100%; }
+  .block .plot { display: flex; align-items: center; justify-content: center; }
 
   /* head-to-head: a ruled table, the way a results page is actually set */
   .h2h { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; }
@@ -173,11 +174,38 @@ def _css(width: int, height: int) -> str:
     return css
 
 
-def _fig_png_datauri(fig: go.Figure, width: int, height: int) -> str:
-    """Render a transparent-background Plotly figure to a data URI for HTML embedding."""
-    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
-    png = fig.to_image(format="png", width=width, height=height, scale=SUB_SCALE)
-    return "data:image/png;base64," + base64.b64encode(png).decode()
+def _plotlyjs() -> str:
+    """plotly.min.js as it ships inside the installed plotly package.
+
+    Inlined rather than pulled from a CDN so a render never depends on the
+    network, and read once per process rather than per figure.
+    """
+    global _PLOTLY_JS
+    if _PLOTLY_JS is None:
+        _PLOTLY_JS = (Path(plotly.__file__).parent / "package_data"
+                      / "plotly.min.js").read_text(encoding="utf-8")
+    return _PLOTLY_JS
+
+
+_PLOTLY_JS: str | None = None
+_plot_n = 0
+
+
+def _fig_html(fig: go.Figure, width: int, height: int) -> str:
+    """A Plotly figure as a div the page draws itself.
+
+    The sheet is already going through headless Chromium, so the chart is
+    drawn there too — no kaleido, no second browser, and the chart lands as
+    vector SVG in the DOM instead of a rasterised PNG pasted into an <img>.
+    """
+    global _plot_n
+    _plot_n += 1
+    div = f"plot{_plot_n}"
+    fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                      width=width, height=height, autosize=False)
+    return (f'<div class="plot" id="{div}"></div>'
+            f'<script>window.__plots.push(Plotly.newPlot({div!r},'
+            f'{fig.to_json()},{{}},{{staticPlot:true}}));</script>')
 
 
 def _render_html(html: str, out: str, width: int = CANVAS_W, height: int = CANVAS_H) -> None:
@@ -190,7 +218,10 @@ def _render_html(html: str, out: str, width: int = CANVAS_W, height: int = CANVA
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": width, "height": height})
-        page.set_content(html, wait_until="networkidle")
+        # "load" means every script has run, so __plots is complete - and it
+        # is legitimately empty on the sheets that carry no chart at all
+        page.set_content(html, wait_until="load")
+        page.evaluate("Promise.all(window.__plots || [])")
         page.evaluate("document.fonts.ready")  # webfonts land before the shutter
         page.screenshot(path=out)
         browser.close()
@@ -199,7 +230,9 @@ def _render_html(html: str, out: str, width: int = CANVAS_W, height: int = CANVA
 def _sheet(kicker: str, meta: str, title: str, sub: str, blocks: str,
            solo: bool = False, width: int = CANVAS_W, height: int = CANVAS_H) -> str:
     """One printed sheet: mono masthead, heavy rule, headline, ruled blocks, colophon."""
-    return f"""<html><head>{_css(width, height)}</head><body>
+    return f"""<html><head>{_css(width, height)}
+      <script>window.__plots=[];</script>
+      <script>{_plotlyjs()}</script></head><body>
       <div class="micro"><span><span class="ix">■</span>&nbsp;&nbsp;{kicker}</span><span>{meta}</span></div>
       <div class="rule"></div>
       <h1>{title}</h1>
@@ -344,8 +377,8 @@ def match_dashboard(pred: dict, market: dict | None, home: str, away: str,
     """One printed sheet per fixture: model vs market, scoreline plate,
     head-to-head, and the verdict as the focal event."""
     # matches the block aspect so `object-fit: contain` has nothing to letterbox
-    market_uri = _fig_png_datauri(_market_fig(pred, market, home, away), 868, 380)
-    heat_uri = _fig_png_datauri(_heatmap_fig(pred["_grid"], home, away), 868, 380)
+    market_html = _fig_html(_market_fig(pred, market, home, away), 868, 380)
+    heat_html = _fig_html(_heatmap_fig(pred["_grid"], home, away), 868, 380)
 
     if h2h:
         h2h_html = "".join(
@@ -367,8 +400,8 @@ def match_dashboard(pred: dict, market: dict | None, home: str, away: str,
     blocks = (
         _block("01", "Model vs Market" if market else "Model Probability",
                "bars = model · ◇ = market" if market else "1X2 · no odds for this source",
-               f'<img src="{market_uri}">')
-        + _block("02", "Scoreline Plate", "0–3 goals · %", f'<img src="{heat_uri}">')
+               market_html)
+        + _block("02", "Scoreline Plate", "0–3 goals · %", heat_html)
         + _block("03", "Head to Head", "last 2 seasons", f'<div class="h2h">{h2h_html}</div>')
         + _block("04", "Verdict", "model pick", f"""
             <div class="verdict">
@@ -392,12 +425,12 @@ def calibration_curve(log_path: str, out: str, bins: int = 10) -> None:
     fig, meta = _calibration_fig(log_path, bins)
     if fig is None:
         return
-    img_uri = _fig_png_datauri(fig, 1660, 700)
+    plot_html = _fig_html(fig, 1660, 700)
     _render_html(_sheet(
         kicker="Calibration", meta="reliability plate",
         title=meta["title"], sub=meta["subtitle"],
         blocks=_block("01", "Predicted vs Actual", "all settled outcomes",
-                      f'<img src="{img_uri}">'),
+                      plot_html),
         solo=True), out)
 
 
