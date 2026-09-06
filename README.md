@@ -13,16 +13,15 @@ Built on [`penaltyblog`](https://github.com/martineastwood/penaltyblog)
 
 ## Preview
 
-Every fixture gets one printed sheet — model vs market, scoreline plate,
-head-to-head, and the verdict as the focal event. Two inks only (charcoal +
-signal red), pale-beige paper, hairline rules — the
-[`mono-color`](https://github.com/yanliudesign/mono-color-skill) editorial
-print system applied to a data sheet.
+Every fixture gets one sheet — model vs market, scoreline plate,
+head-to-head, and the verdict. White-smoke paper, jet-black ink, one
+atomic-tangerine accent per block, hairline rules — the
+[`diagram-design`](https://github.com/cathrynlavery/diagram-design) editorial
+system applied to a data sheet.
 
 ![Match forecast sheet](docs/sheet-match.png)
 
-The same two-ink system carries over to the aggregate sheets — hit rate,
-calibration:
+The same system carries the aggregate sheets — hit rate, calibration:
 
 ![Hit-rate scoreboard sheet](docs/sheet-scoreboard.png)
 
@@ -37,6 +36,7 @@ calibration:
 |**`predictions_log.csv` written *before* kickoff**|The one file that makes the whole thing trustworthy: no hindsight, real calibration.|
 |**GitHub Actions cron = the "automation"**|No Dataiku, no server, no bill. The green run-history *is* the automation.|
 |**Static PNGs (Plotly + Playwright)**|Drop straight into a video-editing pipeline — no dashboard to host, no server to run.|
+|**Charts drawn in the page, not by kaleido**|kaleido 0.2.x shares one subprocess across exports; when it wedges, every later export blocks forever (a CI run sat 25 minutes on one step). Playwright's Chromium is already open for the screenshot, so plotly.js draws the charts there — one browser, one less dependency.|
 |**Retry-with-backoff on every fetch**|football-data.co.uk occasionally 503s under load. A transient blip shouldn't cost a whole week's predictions.|
 |**openfootball fallback when the site is down**|If retries are exhausted, results *and* fixtures switch to [openfootball/football.json](https://github.com/openfootball/football.json) (CC0, auto-updated daily, served off GitHub). No odds there, which the pipeline already treats as optional — a week without the market overlay beats a week with no predictions.|
 |**Concurrency-locked, rebase-before-push CI**|Two overlapping runs (schedule + manual dispatch) used to race on the final `git push` and fail the job outright.|
@@ -57,8 +57,8 @@ calibration:
                        predict 1X2 / O-U / BTTS    │
                               │                    │
                      ┌────────┴─────────┐          │
-              predictions_log.csv   mono-color sheet ◄─┘  (model vs market,
-                     │                (Plotly + Playwright)  heatmap, H2H, verdict)
+              predictions_log.csv   editorial sheet ◄─┘  (model vs market,
+                     │              (plotly.js + Playwright)  heatmap, H2H, verdict)
              (later) settle results ──► calibration + scoreboard sheets
 ```
 
@@ -75,7 +75,7 @@ arsims-soccer-analysis/
 │   ├── odds.py               # bookmaker odds → fair probabilities
 │   ├── logger.py             # the calibration ledger
 │   ├── stats.py              # win-rate scoreboard stats
-│   ├── viz.py                # mono-color print sheets: match, calibration, scoreboard
+│   ├── viz.py                # diagram-design sheets: match, calibration, scoreboard
 │   └── predict.py            # per-league orchestration + head-to-head lookup
 ├── scripts/
 │   ├── check_fixtures.py     # dev tool: peek at fixtures.csv freshness

@@ -45,7 +45,6 @@ def compute_accuracy(log_path: str) -> dict | None:
     return {
         "total": total,
         "wins": wins,
-        "losses": total - wins,
         "win_rate": wins / total,
         "by_outcome": by_outcome,   # {'H': {'n':.., 'hits':..}, 'D': {...}, 'A': {...}}
     }

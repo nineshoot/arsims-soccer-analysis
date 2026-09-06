@@ -5,8 +5,8 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def load(path: str | Path = ROOT / "config.yaml") -> dict:
-    with open(path, "r", encoding="utf-8") as f:
+def load() -> dict:
+    with open(ROOT / "config.yaml", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
     # Resolve output paths relative to repo root.
     cfg["output_dir"] = str(ROOT / cfg["output_dir"])
