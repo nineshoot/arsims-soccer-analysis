@@ -33,7 +33,7 @@ def main() -> None:
 
     viz.calibration_curve(
         cfg["log_path"],
-        str(Path(cfg["output_dir"]) / "calibration.png"))
+        config.dated_path(cfg, "calibration", "calibration"))
 
     print("done.")
 

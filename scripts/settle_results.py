@@ -55,8 +55,8 @@ def main() -> None:
     if acc:
         print(f"  scoreboard: {acc['wins']}/{acc['total']} correct "
               f"({acc['win_rate']*100:.1f}%)")
-        out = Path(cfg["output_dir"]) / "accuracy_scoreboard.png"
-        viz.accuracy_scoreboard(acc, str(out))
+        out = config.dated_path(cfg, "scoreboard", "accuracy_scoreboard")
+        viz.accuracy_scoreboard(acc, out)
     else:
         print("  [skip] scoreboard: no settled results yet")
 
