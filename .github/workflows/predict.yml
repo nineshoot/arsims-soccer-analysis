@@ -38,7 +38,7 @@ jobs:
         if: github.event.schedule == '0 9 * * 1' || github.event_name == 'workflow_dispatch'
         run: |
           python -m scripts.settle_results
-          python -m scripts.run_pipeline   # redraw calibration.png
+          python -m scripts.run_pipeline   # redraw the calibration sheet
 
       - name: Commit outputs
         run: |
