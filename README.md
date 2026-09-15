@@ -97,9 +97,23 @@ python -m scripts.settle_results   # fill in results
 python -m scripts.run_pipeline     # redraw calibration curve
 ```
 
-Sheets land in `output/`, one `{league}_{home}_{away}_dashboard.png` per
-fixture, grouped into a `output/<monday-of-that-week>/` folder. Predictions
-accumulate in `predictions_log.csv`.
+Sheets land in `output/`:
+
+```
+output/
+├── 2026-09-14/                                  # monday of that matchweek
+│   ├── E0_Arsenal-FC_Chelsea-FC_dashboard.png   # one per fixture
+│   └── …
+├── calibration/
+│   └── calibration_2026-09-15.png               # one per run, dated
+└── scoreboard/
+    └── accuracy_scoreboard_2026-09-15.png       # one per run, dated
+```
+
+The two aggregate sheets are a running record rather than a current-state
+file — each run keeps its own dated PNG instead of overwriting the last, so
+calibration and hit rate can be read as a series. Predictions accumulate in
+`predictions_log.csv`.
 
 Want to preview the sheet design itself without running the full pipeline
 (no network needed — uses synthetic demo data)?
