@@ -73,6 +73,8 @@ def run_league(code: str, name: str, cfg: dict) -> list[dict]:
 
         rows.append({
             "date": f["date"].date().isoformat(),
+            "kickoff_utc": (f["kickoff_utc"].isoformat()
+                            if pd.notna(f["kickoff_utc"]) else None),
             "league": name,
             "team_home": home, "team_away": away,
             "p_home": pred["p_home"], "p_draw": pred["p_draw"],
