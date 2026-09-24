@@ -161,9 +161,22 @@ _CSS = """
     border: 1px solid __RULE__; border-radius: 8px;   /* borders, never shadows */
   }
   .kpi .big em { font-family: __DISPLAY__; font-style: normal; font-size: 96px; font-weight: 500; color: __MUTED__; }
+  .kpi .total { display: flex; flex-direction: column; gap: 16px; }
+  .kpi .total .cap {
+    font-family: __MONO__; font-size: 12px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: __SOFT__; text-align: center;
+  }
+  .kpi .tables { display: flex; flex-direction: column; gap: 48px; }
   .kpi table { width: 100%; border-collapse: collapse; font-size: 24px; }
-  .kpi td { padding: 24px 0; border-bottom: 1px solid __RULE__; }
-  .kpi td.n { text-align: right; font-family: __MONO__; font-weight: 600; }
+  .kpi td { padding: 16px 0; border-bottom: 1px solid __RULE__; }
+  /* the rate is the number people read; hits / n is its evidence */
+  .kpi td.p {
+    width: 160px; text-align: right; font-size: 40px; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .kpi td.n {
+    width: 160px; text-align: right; font-family: __MONO__; font-size: 20px; color: __MUTED__;
+  }
   .kpi caption {
     text-align: left; font-family: __MONO__; font-size: 12px; letter-spacing: 0.18em;
     text-transform: uppercase; color: __SOFT__; padding-bottom: 16px;
@@ -482,13 +495,20 @@ def calibration_curve(log_path: str, out: str, bins: int = 10) -> None:
         solo=True), out)
 
 
+def _rate_table(caption: str, groups: dict[str, dict]) -> str:
+    """A ruled table of hit rates: label | rate | hits / n."""
+    rows = "".join(
+        f'<tr><td>{e(label)}</td><td class="p">{g["hits"] / g["n"] * 100:.0f}%</td>'
+        f'<td class="n">{int(g["hits"])} / {int(g["n"])}</td></tr>'
+        for label, g in groups.items() if g["n"] > 0)
+    return f"<table><caption>{caption}</caption>{rows}</table>"
+
+
 def accuracy_scoreboard(stats: dict, out: str) -> None:
     """Hit-rate sheet. Pure HTML - a number and a ruled table need no chart."""
     names = {"H": "Home picks", "D": "Draw picks", "A": "Away picks"}
     by = stats["by_outcome"]
-    rows = "".join(
-        f'<tr><td>{names[k]}</td><td class="n">{int(by[k]["hits"])} / {int(by[k]["n"])}</td></tr>'
-        for k in ("H", "D", "A") if k in by and by[k]["n"] > 0)
+    outcomes = {names[k]: by[k] for k in ("H", "D", "A") if k in by}
 
     _render_html(_sheet(
         kicker="Scoreboard", meta="hit rate to date",
@@ -496,8 +516,14 @@ def accuracy_scoreboard(stats: dict, out: str) -> None:
         sub=f"{stats['total']} settled predictions · {stats['wins']} correct",
         blocks=_block("01", "Correct Picks", "1X2 · share", f"""
             <div class="kpi">
-              <div class="big">{stats['win_rate']*100:.0f}<em>%</em></div>
-              <table><caption>By picked outcome</caption>{rows}</table>
+              <div class="total">
+                <div class="big">{stats['win_rate']*100:.0f}<em>%</em></div>
+                <div class="cap">Total · all leagues</div>
+              </div>
+              <div class="tables">
+                {_rate_table("By league", stats["by_league"])}
+                {_rate_table("By picked outcome", outcomes)}
+              </div>
             </div>"""),
         solo=True), out)
 
@@ -536,7 +562,9 @@ def _demo() -> None:
     accuracy_scoreboard(
         {"total": 148, "wins": 79, "win_rate": .534,
          "by_outcome": {"H": {"n": 71, "hits": 44}, "D": {"n": 22, "hits": 5},
-                        "A": {"n": 55, "hits": 30}}},
+                        "A": {"n": 55, "hits": 30}},
+         "by_league": {"Premier League": {"n": 70, "hits": 39},
+                       "La Liga": {"n": 78, "hits": 40}}},
         str(out / "sheet_scoreboard.png"))
     print(f"ok - sheets in {out}")
 

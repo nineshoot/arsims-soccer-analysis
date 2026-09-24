@@ -41,10 +41,18 @@ def compute_accuracy(log_path: str) -> dict | None:
         .agg(n="size", hits="sum")
         .to_dict(orient="index")
     )
+    # first-appearance order is config order, since each run logs its
+    # leagues in the order config.yaml lists them
+    by_league = (
+        df.groupby("league", sort=False)["correct"]
+        .agg(n="size", hits="sum")
+        .to_dict(orient="index")
+    )
 
     return {
         "total": total,
         "wins": wins,
         "win_rate": wins / total,
         "by_outcome": by_outcome,   # {'H': {'n':.., 'hits':..}, 'D': {...}, 'A': {...}}
+        "by_league": by_league,     # {'Premier League': {'n':.., 'hits':..}, ...}
     }
