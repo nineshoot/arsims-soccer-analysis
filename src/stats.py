@@ -23,6 +23,9 @@ def compute_accuracy(log_path: str) -> dict | None:
         return None
     df = pd.read_csv(path)
     df = df.dropna(subset=["result"])
+    # only forecasts are scored; rows logged after their match are flagged
+    excluded = int(df["post_match"].sum())
+    df = df[~df["post_match"]]
     if df.empty:
         return None
 
@@ -41,10 +44,19 @@ def compute_accuracy(log_path: str) -> dict | None:
         .agg(n="size", hits="sum")
         .to_dict(orient="index")
     )
+    # first-appearance order is config order, since each run logs its
+    # leagues in the order config.yaml lists them
+    by_league = (
+        df.groupby("league", sort=False)["correct"]
+        .agg(n="size", hits="sum")
+        .to_dict(orient="index")
+    )
 
     return {
         "total": total,
         "wins": wins,
         "win_rate": wins / total,
         "by_outcome": by_outcome,   # {'H': {'n':.., 'hits':..}, 'D': {...}, 'A': {...}}
+        "by_league": by_league,     # {'Premier League': {'n':.., 'hits':..}, ...}
+        "post_match_excluded": excluded,
     }
