@@ -173,6 +173,11 @@ def fixtures(code: str, season: str | None = None) -> pd.DataFrame:
             df = df[df["Div"] == code].copy()
             df = df.rename(columns=_RENAME)
             df["date"] = pd.to_datetime(df["date"], dayfirst=True, errors="coerce")
+            # fixtures.csv keeps listing matches for a while after they are
+            # played. Predicting one then is not a forecast - and the model
+            # may already have trained on its result.
+            today = pd.Timestamp.now("UTC").tz_localize(None).normalize()
+            df = df[df["date"] >= today]
             keep = ["date", "team_home", "team_away"]
             # carry through whatever odds columns exist for the benchmark overlay
             odds_cols = [c for c in df.columns

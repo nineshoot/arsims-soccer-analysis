@@ -399,8 +399,9 @@ def _calibration_fig(log_path: str, bins: int) -> tuple[go.Figure | None, dict |
         print("  [skip] calibration: predictions_log.csv is empty")
         return None, None
     df = df.dropna(subset=["result"])
+    df = df[~df["post_match"]]  # only forecasts are scored, as on the scoreboard
     if df.empty:
-        print("  [skip] calibration: no settled results yet")
+        print("  [skip] calibration: no settled pre-match predictions yet")
         return None, None
 
     rows = []
@@ -432,7 +433,8 @@ def _calibration_fig(log_path: str, bins: int) -> tuple[go.Figure | None, dict |
                     font=dict(color=MUTED, size=11, family=PLOT_FONT)))
     title = f"Model is off by {mae*100:.1f} points on average" if mae >= 0.02 \
         else "Model tracks its own confidence closely"
-    subtitle = f"{int(agg['n'].sum())} settled outcomes · {bins} buckets"
+    subtitle = (f"{int(agg['n'].sum())} settled outcomes · pre-match predictions only"
+                f" · {bins} buckets")
     return fig, {"title": title, "subtitle": subtitle}
 
 
@@ -490,7 +492,7 @@ def calibration_curve(log_path: str, out: str, bins: int = 10) -> None:
     _render_html(_sheet(
         kicker="Calibration", meta="reliability plate",
         title=meta["title"], sub=meta["subtitle"],
-        blocks=_block("01", "Predicted vs Actual", "all settled outcomes",
+        blocks=_block("01", "Predicted vs Actual", "settled pre-match outcomes",
                       plot_html),
         solo=True), out)
 
@@ -513,7 +515,9 @@ def accuracy_scoreboard(stats: dict, out: str) -> None:
     _render_html(_sheet(
         kicker="Scoreboard", meta="hit rate to date",
         title="Model Hit Rate to Date",
-        sub=f"{stats['total']} settled predictions · {stats['wins']} correct",
+        sub=(f"{stats['total']} settled pre-match predictions · {stats['wins']} correct"
+             + (f" · {stats['post_match_excluded']} logged post-match, not counted"
+                if stats.get("post_match_excluded") else "")),
         blocks=_block("01", "Correct Picks", "1X2 · share", f"""
             <div class="kpi">
               <div class="total">
