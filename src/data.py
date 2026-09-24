@@ -81,6 +81,10 @@ def _get_csv(url: str) -> pd.DataFrame:
 # ---- openfootball fallback (github.com/openfootball/football.json) -------
 _OF_BASE = "https://raw.githubusercontent.com/openfootball/football.json/master"
 _OF_CODE = {"E0": "en.1", "SP1": "es.1", "I1": "it.1", "D1": "de.1", "F1": "fr.1"}
+# openfootball times are league-local. Checked for en.1 and es.1 against
+# football-data.co.uk kickoffs; the other three follow the same convention.
+_OF_TZ = {"E0": "Europe/London", "SP1": "Europe/Madrid", "I1": "Europe/Rome",
+          "D1": "Europe/Berlin", "F1": "Europe/Paris"}
 _used_fallback: dict[str, bool] = {}  # code -> did results() have to switch?
 FIXTURE_WINDOW_DAYS = 8  # roughly what football-data.co.uk's fixtures.csv holds
 
@@ -102,10 +106,26 @@ def _of_matches(code: str, season: str) -> pd.DataFrame:
         score = m.get("score")
         ft = score.get("ft") if isinstance(score, dict) else score  # schema varies
         rows.append({
-            "date": m["date"], "team_home": m["team1"], "team_away": m["team2"],
+            "date": m["date"], "time": m.get("time"),
+            "team_home": m["team1"], "team_away": m["team2"],
             "goals_home": ft[0] if ft else None, "goals_away": ft[1] if ft else None,
         })
     return pd.DataFrame(rows)
+
+
+def _kickoff(date: pd.Series, time: pd.Series, tz: str) -> pd.Series:
+    """Local date + local HH:MM -> UTC kickoff. NaT wherever the time is unknown."""
+    local = pd.to_datetime(date.dt.strftime("%Y-%m-%d") + " " + time.astype("string"),
+                           errors="coerce")
+    return local.dt.tz_localize(tz, ambiguous="NaT", nonexistent="NaT").dt.tz_convert("UTC")
+
+
+def _upcoming(df: pd.DataFrame) -> pd.Series:
+    """Not yet kicked off. A fixture with no known time falls back to its date."""
+    now = pd.Timestamp.now("UTC")
+    known = df["kickoff_utc"].notna()
+    return ((known & (df["kickoff_utc"] > now))
+            | (~known & (df["date"] >= now.tz_localize(None).normalize())))
 
 
 def results(code: str, seasons: list[str]) -> pd.DataFrame:
@@ -173,12 +193,14 @@ def fixtures(code: str, season: str | None = None) -> pd.DataFrame:
             df = df[df["Div"] == code].copy()
             df = df.rename(columns=_RENAME)
             df["date"] = pd.to_datetime(df["date"], dayfirst=True, errors="coerce")
+            # fixtures.csv lists kickoff in UK time, whatever the league
+            time = df["Time"] if "Time" in df else pd.Series(pd.NA, index=df.index)
+            df["kickoff_utc"] = _kickoff(df["date"], time, "Europe/London")
             # fixtures.csv keeps listing matches for a while after they are
             # played. Predicting one then is not a forecast - and the model
             # may already have trained on its result.
-            today = pd.Timestamp.now("UTC").tz_localize(None).normalize()
-            df = df[df["date"] >= today]
-            keep = ["date", "team_home", "team_away"]
+            df = df[_upcoming(df)]
+            keep = ["date", "kickoff_utc", "team_home", "team_away"]
             # carry through whatever odds columns exist for the benchmark overlay
             odds_cols = [c for c in df.columns
                          if c[:-1] in ("B365", "PS", "Avg") and c[-1] in "HDA"]
@@ -192,13 +214,15 @@ def fixtures(code: str, season: str | None = None) -> pd.DataFrame:
     print(f"  [warn] {code}: falling back to openfootball for fixtures (no odds)")
     df = _of_matches(code, season)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df = df[df["goals_home"].isna()]  # unplayed = no score yet
+    df["kickoff_utc"] = _kickoff(df["date"], df["time"], _OF_TZ[code])
+    df = df[df["goals_home"].isna() & _upcoming(df)]  # unplayed and not yet started
     # openfootball carries the WHOLE remaining season; fixtures.csv only ever
     # holds the next ~week. Match that window, or one fallback run would
     # render hundreds of sheets per league.
-    now = pd.Timestamp.now("UTC").tz_localize(None).normalize()
-    df = df[df["date"].between(now, now + pd.Timedelta(days=FIXTURE_WINDOW_DAYS))]
-    return df[["date", "team_home", "team_away"]].dropna(subset=["team_home", "team_away"])
+    today = pd.Timestamp.now("UTC").tz_localize(None).normalize()
+    df = df[df["date"] <= today + pd.Timedelta(days=FIXTURE_WINDOW_DAYS)]
+    return (df[["date", "kickoff_utc", "team_home", "team_away"]]
+            .dropna(subset=["team_home", "team_away"]))
 
 
 def _demo() -> None:
@@ -213,8 +237,12 @@ def _demo() -> None:
     season_csv = (b"Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,B365H,B365D,B365A\r\n"
                   b"E0,16/08/2024,Man United,Fulham,1,0,H,2.10,3.40,3.60\r\n"
                   b"E0,17/08/2024,Arsenal,Wolves,2,2,D,1.30,5.80,9.00\r\n")
-    fix_csv = ("﻿Div,Date,HomeTeam,AwayTeam,B365H,B365D,B365A\r\n"
-               "E0,13/09/2026,Everton,Man United,2.50,3.30,2.80\r\n").encode()
+    # relative dates: a fixed one would drift into the past and get filtered
+    day = pd.Timestamp.now("UTC").tz_localize(None).normalize()
+    past, soon = day - pd.Timedelta(days=1), day + pd.Timedelta(days=3)
+    fix_csv = ("﻿Div,Date,Time,HomeTeam,AwayTeam,B365H,B365D,B365A\r\n"
+               f"E0,{past:%d/%m/%Y},15:00,Played,Already,2.50,3.30,2.80\r\n"
+               f"E0,{soon:%d/%m/%Y},15:00,Everton,Man United,2.50,3.30,2.80\r\n").encode()
 
     class _Stub(BaseHTTPRequestHandler):
         def do_GET(self):
@@ -239,7 +267,12 @@ def _demo() -> None:
     assert list(hist["result"]) == ["H", "D"], hist["result"].tolist()
     assert str(hist["date"].iloc[0].date()) == "2024-08-16", "dd/mm/yyyy is dayfirst"
     assert "B365H" in hist.columns, "odds must survive for the market benchmark"
-    assert "B365H" in fixtures("E0").columns
+    fx = fixtures("E0")
+    assert "B365H" in fx.columns
+    assert list(fx["team_home"]) == ["Everton"], "a match already played must be dropped"
+    ko = fx["kickoff_utc"].iloc[0]
+    want = (soon + pd.Timedelta(hours=15)).tz_localize("Europe/London").tz_convert("UTC")
+    assert ko == want, f"15:00 UK must convert to UTC: {ko} != {want}"
     srv.shutdown()
 
     # A hostile Retry-After must never park CI for the requested hour.  The

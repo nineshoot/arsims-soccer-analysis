@@ -16,7 +16,7 @@ import pandas as pd
 KEY = ["date", "team_home", "team_away"]
 
 COLUMNS = [
-    "date", "league", "team_home", "team_away",
+    "date", "kickoff_utc", "league", "team_home", "team_away",
     "p_home", "p_draw", "p_away", "over_2_5", "btts",
     "mkt_home", "mkt_draw", "mkt_away", "odds_source",
     "logged_at", "post_match",
@@ -26,16 +26,23 @@ COLUMNS = [
 
 
 def post_match(df: pd.DataFrame) -> pd.Series:
-    """True where a prediction was logged after its match day.
+    """True where a prediction was logged at or after kickoff.
 
     Such a row is not a forecast, and scoring it would flatter the model.
     The pipeline no longer writes them, but early runs predicted matches
     that fixtures.csv still listed after they were played; those rows stay
     in the ledger, flagged rather than deleted, and are left out of scoring.
+
+    Judged by kickoff time. The match day alone is not enough: a Friday
+    game kicking off at 19:00 UTC and predicted at 22:36 the same evening
+    is post-match, and a day rule calls it a forecast. Only where the
+    kickoff is unknown does this fall back to the day.
     """
-    match_day = pd.to_datetime(df["date"]).dt.date
-    logged_day = pd.to_datetime(df["logged_at"], utc=True, format="ISO8601").dt.date
-    return logged_day > match_day
+    logged = pd.to_datetime(df["logged_at"], utc=True, format="ISO8601")
+    kickoff = pd.to_datetime(df["kickoff_utc"] if "kickoff_utc" in df else pd.NaT,
+                             utc=True, format="ISO8601")
+    by_day = logged.dt.date > pd.to_datetime(df["date"]).dt.date
+    return (logged >= kickoff).where(kickoff.notna(), by_day).astype(bool)
 
 
 def _read_existing(path: Path) -> pd.DataFrame | None:
