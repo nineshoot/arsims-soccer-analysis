@@ -1,7 +1,7 @@
 """Tiny config loader so every module reads the same settings."""
 from datetime import datetime, timezone
 from pathlib import Path
-import yaml
+import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -22,8 +22,8 @@ def dated_path(cfg: dict, folder: str, stem: str) -> str:
 
 
 def load() -> dict:
-    with open(ROOT / "config.yaml", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    with open(ROOT / "config.toml", "rb") as f:
+        cfg = tomllib.load(f)
     # Resolve output paths relative to repo root.
     cfg["output_dir"] = str(ROOT / cfg["output_dir"])
     cfg["log_path"] = str(ROOT / cfg["log_path"])

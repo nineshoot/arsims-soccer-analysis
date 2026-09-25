@@ -41,6 +41,9 @@ import plotly
 import plotly.graph_objects as go
 from playwright.sync_api import sync_playwright
 
+from .stats import best
+from . import logger
+
 CANVAS_W, CANVAS_H = 1920, 1080
 
 # ---- diagram-design tokens, default light skin ----
@@ -290,20 +293,9 @@ def _block(n: str, label: str, meta: str, inner: str) -> str:
             f'&nbsp;&nbsp;{label}</span><span>{meta}</span></div>{inner}</div>')
 
 
-def _best(pred: dict) -> int:
-    """Index of the most likely outcome: 0 home, 1 draw, 2 away.
-
-    A tie reads as a draw, which is what "too close to call" means - and it
-    keeps the headline, the focal bar and the verdict picking the same
-    outcome, which three separate argmaxes did not guarantee.
-    """
-    ps = [pred["p_home"], pred["p_draw"], pred["p_away"]]
-    return 1 if ps[1] == max(ps) else max(range(3), key=ps.__getitem__)
-
-
 def _insight_title(pred: dict, home: str, away: str) -> str:
     """Lead with the story, not the axis labels."""
-    i = _best(pred)
+    i = best(pred)
     if i == 1:
         return f"{home} vs {away} — too close to call"
     fav, dog, p = ((home, away, pred["p_home"]) if i == 0
@@ -353,7 +345,7 @@ def _market_fig(pred: dict, market: dict | None, home: str, away: str) -> go.Fig
     model = [pred["p_home"] * 100, pred["p_draw"] * 100, pred["p_away"] * 100]
 
     # exactly one focal bar; the rest take the non-focal series treatment
-    focal = _best(pred)
+    focal = best(pred)
     fills, lines, label_ink = zip(*(
         (ACCENT_TINT, ACCENT, ACCENT) if i == focal else (SERIES, MUTED, MUTED)
         for i in range(3)))
@@ -390,26 +382,14 @@ def _market_fig(pred: dict, market: dict | None, home: str, away: str) -> go.Fig
 
 def _calibration_fig(log_path: str, bins: int) -> tuple[go.Figure | None, dict | None]:
     """Returns (fig, {'title','subtitle'}), or (None, None) if nothing to plot yet."""
-    if not Path(log_path).exists() or Path(log_path).stat().st_size == 0:
-        print("  [skip] calibration: predictions_log.csv doesn't exist yet")
-        return None, None
-    try:
-        df = pd.read_csv(log_path)
-    except pd.errors.EmptyDataError:
-        print("  [skip] calibration: predictions_log.csv is empty")
-        return None, None
-    df = df.dropna(subset=["result"])
-    df = df[~df["post_match"]]  # only forecasts are scored, as on the scoreboard
-    if df.empty:
+    got = logger.scorable(log_path)  # settled forecasts only, as on the scoreboard
+    if got is None:
         print("  [skip] calibration: no settled pre-match predictions yet")
         return None, None
+    df, _ = got
 
-    rows = []
-    for _, r in df.iterrows():
-        rows += [(r["p_home"], r["result"] == "H"),
-                 (r["p_draw"], r["result"] == "D"),
-                 (r["p_away"], r["result"] == "A")]
-    c = pd.DataFrame(rows, columns=["p", "hit"])
+    c = pd.concat([pd.DataFrame({"p": df[f"p_{k}"], "hit": df["result"] == v})
+                   for k, v in (("home", "H"), ("draw", "D"), ("away", "A"))])
     c["bucket"] = pd.cut(c["p"], np.linspace(0, 1, bins + 1))
     agg = c.groupby("bucket", observed=True).agg(
         pred=("p", "mean"), actual=("hit", "mean"), n=("hit", "size")).dropna()
@@ -454,7 +434,7 @@ def match_dashboard(pred: dict, market: dict | None, home: str, away: str,
     else:
         h2h_html = '<div class="h2h-empty">No meetings in the last 2 seasons</div>'
 
-    i = _best(pred)
+    i = best(pred)
     verdict = (home, "Draw", away)[i]
     verdict_p = (pred["p_home"], pred["p_draw"], pred["p_away"])[i]
     # display type is set to the word, not the other way round
@@ -545,7 +525,7 @@ def _demo() -> None:
     assert "too close to call" in _insight_title(p3(.30, .40, .30), "A", "B")
     assert "tight matchup" in _insight_title(p3(.40, .20, .40), "A", "B")
     # headline, focal bar and verdict must agree on the pick
-    assert _best(p3(.40, .40, .20)) == 1, "a tie reads as a draw everywhere"
+    assert best(p3(.40, .40, .20)) == 1, "a tie reads as a draw everywhere"
 
     # exactly one focal bar - diagram-design allows 1-2 accents, never 3
     pred = {"p_home": .642, "p_draw": .221, "p_away": .137}

@@ -66,7 +66,7 @@ The same system carries the aggregate sheets — hit rate, calibration:
 
 ```
 arsims-soccer-analysis/
-├── config.yaml               # leagues, seasons, xi, odds priority
+├── config.toml               # leagues, seasons, xi, odds priority
 ├── requirements.txt
 ├── docs/                     # README preview images
 ├── src/
@@ -139,7 +139,7 @@ landing on `main` while the job is running doesn't fail the whole run.
 
 ## Tuning
 
-* **`config.yaml → model.xi`** — decay speed. Higher = forget old games
+* **`config.toml → model.xi`** — decay speed. Higher = forget old games
 faster. Backtest to find the sweet spot for each league.
 * **`odds_priority`** — which bookmaker columns to benchmark against.
 * **`leagues`** — add `I1` (Serie A), `D1` (Bundesliga), `F1` (Ligue 1).

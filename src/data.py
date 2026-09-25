@@ -80,11 +80,12 @@ def _get_csv(url: str) -> pd.DataFrame:
 
 # ---- openfootball fallback (github.com/openfootball/football.json) -------
 _OF_BASE = "https://raw.githubusercontent.com/openfootball/football.json/master"
-_OF_CODE = {"E0": "en.1", "SP1": "es.1", "I1": "it.1", "D1": "de.1", "F1": "fr.1"}
-# openfootball times are league-local. Checked for en.1 and es.1 against
+# league code -> (openfootball file, timezone its kickoff times are in).
+# The times are league-local: checked for en.1 and es.1 against
 # football-data.co.uk kickoffs; the other three follow the same convention.
-_OF_TZ = {"E0": "Europe/London", "SP1": "Europe/Madrid", "I1": "Europe/Rome",
-          "D1": "Europe/Berlin", "F1": "Europe/Paris"}
+_OF = {"E0": ("en.1", "Europe/London"), "SP1": ("es.1", "Europe/Madrid"),
+       "I1": ("it.1", "Europe/Rome"), "D1": ("de.1", "Europe/Berlin"),
+       "F1": ("fr.1", "Europe/Paris")}
 _used_fallback: dict[str, bool] = {}  # code -> did results() have to switch?
 FIXTURE_WINDOW_DAYS = 8  # roughly what football-data.co.uk's fixtures.csv holds
 
@@ -95,10 +96,7 @@ def _of_season(season: str) -> str:
 
 
 def _of_matches(code: str, season: str) -> pd.DataFrame:
-    of_code = _OF_CODE.get(code)
-    if not of_code:
-        raise RuntimeError(f"no openfootball mapping for league code {code}")
-    url = f"{_OF_BASE}/{_of_season(season)}/{of_code}.json"
+    url = f"{_OF_BASE}/{_of_season(season)}/{_OF[code][0]}.json"
     r = _session.get(url, timeout=30)
     r.raise_for_status()
     rows = []
@@ -180,7 +178,7 @@ def results(code: str, seasons: list[str]) -> pd.DataFrame:
     return df.sort_values("date").reset_index(drop=True)
 
 
-def fixtures(code: str, season: str | None = None) -> pd.DataFrame:
+def fixtures(code: str, season: str) -> pd.DataFrame:
     """Upcoming fixtures for one league (with pre-match odds if present).
 
     `season` (football-data.co.uk code, e.g. "2526") is only used if the
@@ -189,7 +187,6 @@ def fixtures(code: str, season: str | None = None) -> pd.DataFrame:
     if not _used_fallback.get(code):
         try:
             df = _get_csv(FIXTURES_URL)
-            df.columns = [c.strip().lstrip("﻿") for c in df.columns]  # belt & braces
             df = df[df["Div"] == code].copy()
             df = df.rename(columns=_RENAME)
             df["date"] = pd.to_datetime(df["date"], dayfirst=True, errors="coerce")
@@ -208,13 +205,10 @@ def fixtures(code: str, season: str | None = None) -> pd.DataFrame:
         except Exception as e:
             print(f"  [warn] {code} fixtures: {e}")
 
-    if not season:
-        raise RuntimeError(f"No fixtures for {code}: football-data.co.uk "
-                           f"unreachable and no season given for the fallback")
     print(f"  [warn] {code}: falling back to openfootball for fixtures (no odds)")
     df = _of_matches(code, season)
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df["kickoff_utc"] = _kickoff(df["date"], df["time"], _OF_TZ[code])
+    df["kickoff_utc"] = _kickoff(df["date"], df["time"], _OF[code][1])
     df = df[df["goals_home"].isna() & _upcoming(df)]  # unplayed and not yet started
     # openfootball carries the WHOLE remaining season; fixtures.csv only ever
     # holds the next ~week. Match that window, or one fallback run would
@@ -267,7 +261,7 @@ def _demo() -> None:
     assert list(hist["result"]) == ["H", "D"], hist["result"].tolist()
     assert str(hist["date"].iloc[0].date()) == "2024-08-16", "dd/mm/yyyy is dayfirst"
     assert "B365H" in hist.columns, "odds must survive for the market benchmark"
-    fx = fixtures("E0")
+    fx = fixtures("E0", "2526")
     assert "B365H" in fx.columns
     assert list(fx["team_home"]) == ["Everton"], "a match already played must be dropped"
     ko = fx["kickoff_utc"].iloc[0]

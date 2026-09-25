@@ -10,28 +10,30 @@ did the model's top pick actually happen, and what's the hit rate?"
 actually want to see on screen.
 """
 from __future__ import annotations
-from pathlib import Path
-import pandas as pd
 
-_OUTCOME_MAP = {"p_home": "H", "p_draw": "D", "p_away": "A"}
+from . import logger
+
+
+def best(pred) -> int:
+    """Index of the most likely outcome: 0 home, 1 draw, 2 away.
+
+    The single definition of "the model's pick" - the scoreboard scores it
+    and the sheet headlines it, so both must agree. A tie reads as a draw,
+    which is what "too close to call" means.
+    """
+    ps = [pred["p_home"], pred["p_draw"], pred["p_away"]]
+    return 1 if ps[1] == max(ps) else max(range(3), key=ps.__getitem__)
 
 
 def compute_accuracy(log_path: str) -> dict | None:
     """Returns None if there's nothing settled yet to score."""
-    path = Path(log_path)
-    if not path.exists() or path.stat().st_size == 0:
+    got = logger.scorable(log_path)
+    if got is None:
         return None
-    df = pd.read_csv(path)
-    df = df.dropna(subset=["result"])
-    # only forecasts are scored; rows logged after their match are flagged
-    excluded = int(df["post_match"].sum())
-    df = df[~df["post_match"]]
-    if df.empty:
-        return None
+    df, excluded = got
 
-    probs = df[["p_home", "p_draw", "p_away"]]
     df = df.copy()
-    df["predicted"] = probs.idxmax(axis=1).map(_OUTCOME_MAP)
+    df["predicted"] = df.apply(best, axis=1).map({0: "H", 1: "D", 2: "A"})
     df["correct"] = df["predicted"] == df["result"]
 
     total = len(df)
@@ -45,7 +47,7 @@ def compute_accuracy(log_path: str) -> dict | None:
         .to_dict(orient="index")
     )
     # first-appearance order is config order, since each run logs its
-    # leagues in the order config.yaml lists them
+    # leagues in the order config.toml lists them
     by_league = (
         df.groupby("league", sort=False)["correct"]
         .agg(n="size", hits="sum")

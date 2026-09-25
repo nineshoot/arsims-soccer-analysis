@@ -39,8 +39,7 @@ def post_match(df: pd.DataFrame) -> pd.Series:
     kickoff is unknown does this fall back to the day.
     """
     logged = pd.to_datetime(df["logged_at"], utc=True, format="ISO8601")
-    kickoff = pd.to_datetime(df["kickoff_utc"] if "kickoff_utc" in df else pd.NaT,
-                             utc=True, format="ISO8601")
+    kickoff = pd.to_datetime(df["kickoff_utc"], utc=True, format="ISO8601")
     by_day = logged.dt.date > pd.to_datetime(df["date"]).dt.date
     return (logged >= kickoff).where(kickoff.notna(), by_day).astype(bool)
 
@@ -61,6 +60,20 @@ def _read_existing(path: Path) -> pd.DataFrame | None:
         return None
 
 
+def scorable(log_path: str) -> tuple[pd.DataFrame, int] | None:
+    """Settled forecasts, and how many settled rows were left out as post-match.
+
+    The one place the scoring rule lives: the scoreboard and the calibration
+    curve both read the ledger through here. None until something is.
+    """
+    df = _read_existing(Path(log_path))
+    if df is None:
+        return None
+    settled = df[df["result"].notna()]
+    scored = settled[~settled["post_match"]]
+    return None if scored.empty else (scored, len(settled) - len(scored))
+
+
 def append(rows: list[dict], log_path: str) -> None:
     new = pd.DataFrame(rows)
     new["logged_at"] = pd.Timestamp.utcnow().isoformat()
@@ -78,10 +91,9 @@ def append(rows: list[dict], log_path: str) -> None:
         combined = combined.drop_duplicates(subset=KEY, keep="last")
     else:
         combined = new
-    combined["post_match"] = post_match(combined)
-
     for col in COLUMNS:
         if col not in combined.columns:
             combined[col] = pd.NA
+    combined["post_match"] = post_match(combined)
     combined[COLUMNS].to_csv(path, index=False)
     print(f"  logged {len(new)} predictions -> {path}")
