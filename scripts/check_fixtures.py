@@ -18,7 +18,6 @@ from src.data import _get_csv, FIXTURES_URL  # noqa: E402
 
 def main() -> None:
     df = _get_csv(FIXTURES_URL)
-    df.columns = [c.strip().lstrip("\ufeff") for c in df.columns]
 
     if len(sys.argv) > 1:
         code = sys.argv[1].upper()

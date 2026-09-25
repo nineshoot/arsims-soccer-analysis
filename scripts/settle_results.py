@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src import config, data, stats, viz  # noqa: E402
+from src import config, data, logger, stats, viz  # noqa: E402
 
 
 def main() -> None:
@@ -40,8 +40,7 @@ def main() -> None:
             played = pd.concat(played, ignore_index=True)
             played["date"] = pd.to_datetime(played["date"]).dt.date.astype(str)
 
-            key = ["date", "team_home", "team_away"]
-            log = log.merge(played, on=key, how="left", suffixes=("", "_actual"))
+            log = log.merge(played, on=logger.KEY, how="left", suffixes=("", "_actual"))
             for col in ["goals_home", "goals_away", "result"]:
                 log[col] = log[col].fillna(log[f"{col}_actual"])
                 log = log.drop(columns=[f"{col}_actual"])
