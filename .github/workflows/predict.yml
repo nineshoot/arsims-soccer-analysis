@@ -1,10 +1,13 @@
-name: weekly-predictions
+name: scheduled-predictions
 
 on:
   schedule:
-    # Times are UTC. Thu 07:00 = pre-weekend round, Mon 09:00 = settle.
-    - cron: "0 7 * * 4"     # Thursday: predict upcoming fixtures
-    - cron: "0 9 * * 1"     # Monday:   back-fill results + calibration
+    # Times are UTC; GitHub often starts scheduled runs hours late. Twice a
+    # day because football-data.co.uk publishes a weekend's fixtures only a
+    # day or so ahead - a once-a-week run never sees them, and every
+    # Friday-to-Sunday match went unpredicted from October onwards.
+    - cron: "0 6 * * *"
+    - cron: "0 18 * * *"
   workflow_dispatch:          # let you run it by hand from the Actions tab
 
 permissions:
@@ -30,15 +33,13 @@ jobs:
           pip install -r requirements.txt
           playwright install --with-deps chromium
 
-      - name: Predict upcoming fixtures
-        if: github.event.schedule == '0 7 * * 4' || github.event_name == 'workflow_dispatch'
-        run: python -m scripts.run_pipeline
+      # Settle first: a fixture that has just been played gets its result
+      # before the prediction step sees it, and a settled row is final.
+      - name: Settle results
+        run: python -m scripts.settle_results
 
-      - name: Settle results + calibration
-        if: github.event.schedule == '0 9 * * 1' || github.event_name == 'workflow_dispatch'
-        run: |
-          python -m scripts.settle_results
-          python -m scripts.run_pipeline   # redraw the calibration sheet
+      - name: Predict upcoming fixtures + redraw calibration
+        run: python -m scripts.run_pipeline
 
       - name: Commit outputs
         run: |
