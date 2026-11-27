@@ -15,16 +15,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import config, logger, viz          # noqa: E402
-from src.predict import run_league           # noqa: E402
+from src.predict import run_league, shown_sheets   # noqa: E402
 
 
 def main() -> None:
     cfg = config.load()
     all_rows: list[dict] = []
+    shown = shown_sheets(cfg["log_path"])
 
     for lg in cfg["leagues"]:
         try:
-            all_rows += run_league(lg["code"], lg["name"], cfg)
+            all_rows += run_league(lg["code"], lg["name"], cfg, shown)
         except Exception as e:
             print(f"[error] {lg['name']}: {e}")
 

@@ -38,14 +38,16 @@ The same system carries the aggregate sheets — hit rate, calibration:
 |**Static PNGs (Plotly + Playwright)**|Drop straight into a video-editing pipeline — no dashboard to host, no server to run.|
 |**Charts drawn in the page, not by kaleido**|kaleido 0.2.x shares one subprocess across exports; when it wedges, every later export blocks forever (a CI run sat 25 minutes on one step). Playwright's Chromium is already open for the screenshot, so plotly.js draws the charts there — one browser, one less dependency.|
 |**Retry-with-backoff on every fetch**|football-data.co.uk occasionally 503s under load. A transient blip shouldn't cost a whole week's predictions.|
-|**openfootball fallback when the site is down**|If retries are exhausted, results *and* fixtures switch to [openfootball/football.json](https://github.com/openfootball/football.json) (CC0, auto-updated daily, served off GitHub). No odds there, which the pipeline already treats as optional — a week without the market overlay beats a week with no predictions.|
+|**Fixture list from openfootball, odds from football-data**|football-data.co.uk's `fixtures.csv` only gains a weekend a day or so before it, so on its own a run can miss every weekend match. The list comes from [openfootball/football.json](https://github.com/openfootball/football.json) (CC0, the whole season ahead); its team names are translated into football-data's spelling by lining up results both sources hold (same date, same score — no hand-kept table); `fixtures.csv` adds odds and confirmed kickoffs, and wins wherever both list a match. openfootball's kickoff times are provisional until broadcasters pick games, so a match it alone lists is only predicted before its day.|
+|**openfootball fallback when the site is down**|If retries are exhausted, results *and* fixtures switch to openfootball entirely. No odds there, which the pipeline already treats as optional — a week without the market overlay beats a week with no predictions.|
+|**A sheet is redrawn only when it would read differently**|With two runs a day a fixture is predicted a dozen times before kickoff. Its sheet is only redrawn when the 1X2 percentages or the presence of odds change, so the repo doesn't collect a new PNG of the same picture every run.|
 |**Concurrency-locked, rebase-before-push CI**|Two overlapping runs (schedule + manual dispatch) used to race on the final `git push` and fail the job outright.|
 
 ## How it works
 
 ```
        football-data.co.uk (results + odds, free)
-         └── if unreachable: openfootball/football.json (no odds)
+         + openfootball/football.json (season schedule; everything if the site is down)
                               │
         ┌─────────────────────┴─────────────────────┐
         │  historical results         │  upcoming fixtures        │
