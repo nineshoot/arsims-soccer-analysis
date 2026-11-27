@@ -83,7 +83,7 @@ arsims-soccer-analysis/
 │   └── settle_results.py     # back-fill actual results
 ├── output/                   # generated PNGs (auto-committed by CI)
 ├── predictions_log.csv       # created on first run
-└── .github/workflows/predict.yml   # Thu predict · Mon settle
+└── .github/workflows/predict.yml   # twice daily: settle, then predict
 ```
 
 ## Run it locally
@@ -126,8 +126,13 @@ python -m src.viz /tmp/preview   # writes sheet_match.png + sheet_scoreboard.png
 
 Push to GitHub — `.github/workflows/predict.yml` already schedules:
 
-* **Thursday 07:00 UTC** — predict the weekend's fixtures + render sheets
-* **Monday 09:00 UTC** — settle results + redraw calibration
+* **06:00 and 18:00 UTC, every day** — settle any finished matches, then
+  predict every fixture that hasn't kicked off + render sheets
+
+Twice a day because football-data.co.uk publishes a weekend's fixtures
+only a day or so ahead, and GitHub often starts a scheduled run hours
+late. A fixture is predicted on every run until kickoff; the ledger keeps
+the latest of those, and a settled row is never touched again.
 
 It commits `predictions_log.csv` and `output/*.png` back automatically.
 Trigger a manual run anytime from the **Actions** tab (`workflow_dispatch`).
