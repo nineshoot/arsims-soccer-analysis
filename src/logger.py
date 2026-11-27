@@ -44,7 +44,7 @@ def post_match(df: pd.DataFrame) -> pd.Series:
     return (logged >= kickoff).where(kickoff.notna(), by_day).astype(bool)
 
 
-def _read_existing(path: Path) -> pd.DataFrame | None:
+def read(path: Path) -> pd.DataFrame | None:
     """Return the existing log, or None if there's nothing usable yet.
 
     A previous run can leave a 0-byte or header-only file behind (e.g. an
@@ -66,7 +66,7 @@ def scorable(log_path: str) -> tuple[pd.DataFrame, int] | None:
     The one place the scoring rule lives: the scoreboard and the calibration
     curve both read the ledger through here. None until something is.
     """
-    df = _read_existing(Path(log_path))
+    df = read(Path(log_path))
     if df is None:
         return None
     settled = df[df["result"].notna()]
@@ -79,13 +79,21 @@ def append(rows: list[dict], log_path: str) -> None:
     new["logged_at"] = pd.Timestamp.utcnow().isoformat()
 
     path = Path(log_path)
-    old = _read_existing(path)
+    old = read(path)
     if old is not None:
         # A settled row is final. Re-predicting its fixture used to replace
         # it, which threw away the result and swapped a pre-match forecast
         # for one made after the match.
         settled = old.loc[old["result"].notna()].set_index(KEY).index
         new = new[~new.set_index(KEY).index.isin(settled)]
+        # A home/away pairing is one match per season, so an unsettled row
+        # for a pairing that is being predicted again is the same match,
+        # perhaps rescheduled. Keyed on the date alone, the old row would
+        # be orphaned under its old date and never settle.
+        pair = ["team_home", "team_away"]
+        stale = (old["result"].isna()
+                 & old.set_index(pair).index.isin(new.set_index(pair).index))
+        old = old[~stale]
         combined = pd.concat([old, new], ignore_index=True)
         # an unsettled fixture re-predicted before kickoff takes the fresher row
         combined = combined.drop_duplicates(subset=KEY, keep="last")

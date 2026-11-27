@@ -11,17 +11,49 @@ from __future__ import annotations
 from pathlib import Path
 import pandas as pd
 
-from . import data, viz
+from . import data, logger, viz
 from .model import DixonColes
 from .odds import implied_from_row
 
 
-def _week_folder(base: Path, dates) -> Path:
-    """Monday of the ISO week the earliest fixture date falls in."""
-    monday = (dates.min() - pd.Timedelta(days=int(dates.min().weekday()))).date()
+def _week_folder(base: Path, date) -> Path:
+    """Monday of the ISO week the fixture falls in.
+
+    Per fixture, not per run: the fixture window can span two weeks, and a
+    run-wide folder would file one match under different weeks on
+    different days.
+    """
+    monday = (date - pd.Timedelta(days=int(date.weekday()))).date()
     folder = base / monday.isoformat()
     folder.mkdir(parents=True, exist_ok=True)
     return folder
+
+
+def _sheet_sig(p_home: float, p_draw: float, p_away: float, has_market: bool) -> tuple:
+    """What a sheet visibly turns on: 1X2 to the whole percent, and whether
+    it carries the market overlay.
+
+    ponytail: ignores the 0.1% shifts in the scoreline plate. With two runs a
+    day, a fixture is predicted a dozen times before kickoff and the model
+    refits after every matchday; redrawing on every change would commit a new
+    PNG each time for a sheet that reads the same.
+    """
+    return (round(p_home * 100), round(p_draw * 100), round(p_away * 100), bool(has_market))
+
+
+def shown_sheets(log_path: str) -> dict[tuple, tuple]:
+    """The signature of the sheet last drawn for each unsettled ledger row.
+
+    A row is only rewritten with an unchanged signature when its sheet was
+    skipped as unchanged, so the ledger's row always describes the sheet.
+    """
+    df = logger.read(Path(log_path))
+    if df is None:
+        return {}
+    df = df[df["result"].isna()]
+    return {(r.date, r.team_home, r.team_away):
+            _sheet_sig(r.p_home, r.p_draw, r.p_away, pd.notna(r.mkt_home))
+            for r in df.itertuples()}
 
 
 def _h2h_rows(hist: pd.DataFrame, home: str, away: str, seasons: list[str],
@@ -39,7 +71,8 @@ def _h2h_rows(hist: pd.DataFrame, home: str, away: str, seasons: list[str],
     ]
 
 
-def run_league(code: str, name: str, cfg: dict) -> list[dict]:
+def run_league(code: str, name: str, cfg: dict,
+               shown: dict[tuple, tuple] | None = None) -> list[dict]:
     print(f"[{name}] downloading results…")
     hist = data.results(code, cfg["train_seasons"])
 
@@ -58,8 +91,8 @@ def run_league(code: str, name: str, cfg: dict) -> list[dict]:
         print(f"  [warn] no fixtures for {code}")
         return []
 
-    out_dir = _week_folder(Path(cfg["output_dir"]), fix["date"])
     rows: list[dict] = []
+    drawn = kept = 0
 
     for _, f in fix.iterrows():
         home, away = f["team_home"], f["team_away"]
@@ -71,8 +104,9 @@ def run_league(code: str, name: str, cfg: dict) -> list[dict]:
         market = implied_from_row(f, cfg["odds_priority"])
         h2h = _h2h_rows(hist, home, away, cfg["train_seasons"])
 
+        date = f["date"].date().isoformat()
         rows.append({
-            "date": f["date"].date().isoformat(),
+            "date": date,
             "kickoff_utc": (f["kickoff_utc"].isoformat()
                             if pd.notna(f["kickoff_utc"]) else None),
             "league": name,
@@ -87,10 +121,15 @@ def run_league(code: str, name: str, cfg: dict) -> list[dict]:
         })
 
         slug = f"{code}_{home}_{away}".replace(" ", "-")
+        out = _week_folder(Path(cfg["output_dir"]), f["date"]) / f"{slug}_dashboard.png"
+        sig = _sheet_sig(pred["p_home"], pred["p_draw"], pred["p_away"], market is not None)
+        if out.exists() and (shown or {}).get((date, home, away)) == sig:
+            kept += 1
+            continue
         try:
-            viz.match_dashboard(pred, market, home, away, h2h,
-                                str(out_dir / f"{slug}_dashboard.png"),
-                                league=name, date=f["date"].date().isoformat())
+            viz.match_dashboard(pred, market, home, away, h2h, str(out),
+                                league=name, date=date)
+            drawn += 1
         except Exception as e:
             # Chart rendering is a nice-to-have, not the source of truth —
             # a failure here (e.g. a broken playwright install on some CI
@@ -99,5 +138,6 @@ def run_league(code: str, name: str, cfg: dict) -> list[dict]:
             # depends on.
             print(f"  [warn] dashboard render failed for {home} vs {away}: {e}")
 
-    print(f"[{name}] {len(rows)} fixtures predicted -> {out_dir}")
+    print(f"[{name}] {len(rows)} fixtures predicted; "
+          f"{drawn} sheets drawn, {kept} unchanged")
     return rows

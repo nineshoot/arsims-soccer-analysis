@@ -31,6 +31,7 @@ checks it before even trying football-data.co.uk, so both always agree.
 """
 from __future__ import annotations
 import io
+from collections import Counter
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -178,45 +179,122 @@ def results(code: str, seasons: list[str]) -> pd.DataFrame:
     return df.sort_values("date").reset_index(drop=True)
 
 
-def fixtures(code: str, season: str) -> pd.DataFrame:
-    """Upcoming fixtures for one league (with pre-match odds if present).
+FIXTURE_COLS = ["date", "kickoff_utc", "team_home", "team_away"]
 
-    `season` (football-data.co.uk code, e.g. "2526") is only used if the
-    openfootball fallback kicks in - pass the latest of your train_seasons.
+
+def _fd_fixtures(code: str) -> pd.DataFrame:
+    """fixtures.csv rows for one league, odds and all - played ones included."""
+    df = _get_csv(FIXTURES_URL)
+    df = df[df["Div"] == code].copy()
+    df = df.rename(columns=_RENAME)
+    df["date"] = pd.to_datetime(df["date"], dayfirst=True, errors="coerce")
+    # fixtures.csv lists kickoff in UK time, whatever the league
+    time = df["Time"] if "Time" in df else pd.Series(pd.NA, index=df.index)
+    df["kickoff_utc"] = _kickoff(df["date"], time, "Europe/London")
+    # carry through whatever odds columns exist for the benchmark overlay
+    odds_cols = [c for c in df.columns
+                 if c[:-1] in ("B365", "PS", "Avg") and c[-1] in "HDA"]
+    return df[FIXTURE_COLS + odds_cols].dropna(subset=["team_home", "team_away"])
+
+
+def _of_window(code: str, of: pd.DataFrame) -> pd.DataFrame:
+    """openfootball's matches dated after today, within the fixture window.
+
+    Only after today, because openfootball's kickoff times are provisional
+    until the broadcasters pick their matches: a Saturday 12:30 game can sit
+    at 15:00 for weeks. Trusting that on the day itself could log a forecast
+    made after the real kickoff as pre-match. On match day a match is only
+    predicted once fixtures.csv confirms its time.
     """
-    if not _used_fallback.get(code):
-        try:
-            df = _get_csv(FIXTURES_URL)
-            df = df[df["Div"] == code].copy()
-            df = df.rename(columns=_RENAME)
-            df["date"] = pd.to_datetime(df["date"], dayfirst=True, errors="coerce")
-            # fixtures.csv lists kickoff in UK time, whatever the league
-            time = df["Time"] if "Time" in df else pd.Series(pd.NA, index=df.index)
-            df["kickoff_utc"] = _kickoff(df["date"], time, "Europe/London")
-            # fixtures.csv keeps listing matches for a while after they are
-            # played. Predicting one then is not a forecast - and the model
-            # may already have trained on its result.
-            df = df[_upcoming(df)]
-            keep = ["date", "kickoff_utc", "team_home", "team_away"]
-            # carry through whatever odds columns exist for the benchmark overlay
-            odds_cols = [c for c in df.columns
-                         if c[:-1] in ("B365", "PS", "Avg") and c[-1] in "HDA"]
-            return df[keep + odds_cols].dropna(subset=["team_home", "team_away"])
-        except Exception as e:
-            print(f"  [warn] {code} fixtures: {e}")
-
-    print(f"  [warn] {code}: falling back to openfootball for fixtures (no odds)")
-    df = _of_matches(code, season)
+    df = of.copy()
     df["date"] = pd.to_datetime(df["date"], errors="coerce")
     df["kickoff_utc"] = _kickoff(df["date"], df["time"], _OF[code][1])
-    df = df[df["goals_home"].isna() & _upcoming(df)]  # unplayed and not yet started
-    # openfootball carries the WHOLE remaining season; fixtures.csv only ever
-    # holds the next ~week. Match that window, or one fallback run would
-    # render hundreds of sheets per league.
+    # openfootball fills in scores days late, so a missing score is not
+    # proof of unplayed; the date bound is what keeps played matches out
     today = pd.Timestamp.now("UTC").tz_localize(None).normalize()
-    df = df[df["date"] <= today + pd.Timedelta(days=FIXTURE_WINDOW_DAYS)]
-    return (df[["date", "kickoff_utc", "team_home", "team_away"]]
-            .dropna(subset=["team_home", "team_away"]))
+    # it also carries the WHOLE remaining season; keep about a matchweek,
+    # or every run would render hundreds of sheets per league
+    df = df[df["goals_home"].isna() & (df["date"] > today)
+            & (df["date"] <= today + pd.Timedelta(days=FIXTURE_WINDOW_DAYS))]
+    return df[FIXTURE_COLS].dropna(subset=["team_home", "team_away"])
+
+
+def _played(df: pd.DataFrame, dayfirst: bool) -> pd.DataFrame:
+    df = df.dropna(subset=["goals_home", "goals_away"]).copy()
+    df["date"] = pd.to_datetime(df["date"], dayfirst=dayfirst, errors="coerce")
+    df[["goals_home", "goals_away"]] = df[["goals_home", "goals_away"]].astype(int)
+    return df
+
+
+def _name_map(of_played: pd.DataFrame, fd_played: pd.DataFrame) -> dict[str, str]:
+    """openfootball team name -> football-data.co.uk's, read off shared results.
+
+    A match both sources hold has the same date and score, so lining them up
+    pairs the names. Two matches on one date with one score pair wrongly as
+    well, so a name only maps when one partner clearly wins the vote, and a
+    football-data name claimed by two openfootball names maps to neither.
+    """
+    j = of_played.merge(fd_played, on=["date", "goals_home", "goals_away"],
+                        suffixes=("_of", "_fd"))
+    votes: dict[str, Counter] = {}
+    for side in ("home", "away"):
+        for of, fd in zip(j[f"team_{side}_of"], j[f"team_{side}_fd"]):
+            votes.setdefault(of, Counter())[fd] += 1
+    m = {}
+    for of, c in votes.items():
+        top = c.most_common(2)
+        if len(top) == 1 or top[0][1] > top[1][1]:
+            m[of] = top[0][0]
+    claimed = Counter(m.values())
+    return {of: fd for of, fd in m.items() if claimed[fd] == 1}
+
+
+def fixtures(code: str, season: str) -> pd.DataFrame:
+    """Upcoming fixtures for one league, with pre-match odds where there are any.
+
+    The list comes from openfootball, which publishes the whole season ahead.
+    football-data.co.uk's fixtures.csv only gains a weekend a day or so before
+    it, so on its own a run can miss every weekend match. openfootball names
+    are translated into football-data's spelling - the one the model is
+    trained on - and fixtures.csv adds odds, and any match openfootball lacks.
+
+    `season` is the football-data code, e.g. "2627" - the latest train_season.
+    """
+    if _used_fallback.get(code):
+        # results() came from openfootball too, so the names already agree
+        print(f"  [warn] {code}: fixtures from openfootball only (no odds)")
+        return _of_window(code, _of_matches(code, season))
+
+    try:
+        fd = _fd_fixtures(code)
+    except Exception as e:
+        print(f"  [warn] {code} fixtures.csv: {e}")
+        fd = pd.DataFrame(columns=FIXTURE_COLS)
+    try:
+        of = _of_matches(code, season)
+        fd_season = _get_csv(SEASON_URL.format(season=season, code=code)).rename(columns=_RENAME)
+        names = _name_map(_played(of, dayfirst=False), _played(fd_season, dayfirst=True))
+        sched = _of_window(code, of)
+        known = sched["team_home"].isin(names) & sched["team_away"].isin(names)
+        if not known.all():
+            print(f"  [warn] {code}: {int((~known).sum())} openfootball fixtures "
+                  f"have a team with no football-data name yet - skipped")
+        sched = sched[known].replace({"team_home": names, "team_away": names})
+    except Exception as e:
+        print(f"  [warn] {code} openfootball schedule: {e}")
+        sched = pd.DataFrame(columns=FIXTURE_COLS)
+    # A home/away pairing occurs once per league season, so it identifies
+    # the match even if the two sources disagree on its date. Where both
+    # list it, fixtures.csv wins - fresher, confirmed kickoff, odds - and
+    # that holds even once it has kicked off: openfootball's stale time
+    # must never stand in for it.
+    pair = ["team_home", "team_away"]
+    extra = sched[~sched.set_index(pair).index.isin(fd.set_index(pair).index)]
+    out = pd.concat([fd, extra], ignore_index=True)
+    # fixtures.csv keeps listing matches for a while after they are played.
+    # Predicting one then is not a forecast - and the model may already
+    # have trained on its result.
+    return out[_upcoming(out)].reset_index(drop=True)
 
 
 def _demo() -> None:
@@ -226,6 +304,18 @@ def _demo() -> None:
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
     assert _of_season("2526") == "2025-26"
+
+    # name map: two 1-1 draws on one date pair every way, so they decide
+    # nothing on their own; a later unique result settles it
+    of = pd.DataFrame({"date": pd.to_datetime(["2026-08-01"] * 2 + ["2026-08-08"]),
+                       "team_home": ["Arsenal FC", "Chelsea FC", "Arsenal FC"],
+                       "team_away": ["Leeds United FC", "Everton FC", "Everton FC"],
+                       "goals_home": [1, 1, 3], "goals_away": [1, 1, 0]})
+    fd = of.replace({"Arsenal FC": "Arsenal", "Chelsea FC": "Chelsea",
+                     "Leeds United FC": "Leeds", "Everton FC": "Everton"})
+    m = _name_map(of, fd)
+    assert m == {"Arsenal FC": "Arsenal", "Everton FC": "Everton"}, m
+    assert "Chelsea FC" not in m, "a tie must not guess"
 
     # --- primary path: a stand-in football-data.co.uk, odds and all
     season_csv = (b"Div,Date,HomeTeam,AwayTeam,FTHG,FTAG,FTR,B365H,B365D,B365A\r\n"
@@ -310,7 +400,11 @@ def _demo() -> None:
         else "A" if r.goals_home < r.goals_away else "D", axis=1)]
     assert wrong.empty, f"{len(wrong)} rows have the wrong H/D/A"
     # the window matters: openfootball holds the whole season, not one week
-    assert len(fixtures("E0", "2627")) < 25, "fixtures must stay near one matchweek"
+    fx = fixtures("E0", "2627")
+    today = pd.Timestamp.now("UTC").tz_localize(None).normalize()
+    assert fx.empty or (fx["date"] > today).all(), "unconfirmed: never on match day"
+    assert fx.empty or fx["date"].max() <= today + pd.Timedelta(days=FIXTURE_WINDOW_DAYS), \
+        "openfootball holds the whole season; fixtures must stay inside the window"
     SEASON_URL, FIXTURES_URL = keep
     print("ok - primary path, openfootball fallback, and the switch between them")
 
